@@ -17,6 +17,7 @@ jobs:
 
       - name: Unzip project
         run: |
+          set -e
           mkdir -p project
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
           echo "Using ZIP: $ZIP"
@@ -24,8 +25,35 @@ jobs:
           unzip -q "$ZIP" -d project
           find project -name "*.xcodeproj" -o -name "*.xcworkspace"
 
+      - name: Fix Swift compile error
+        run: |
+          set -e
+          echo "Fixing OpticalFlowQuality .balanced error..."
+
+          if grep -R "OpticalFlowQuality = \.balanced" project --include="*.swift"; then
+            if grep -R "case standard" project --include="*.swift"; then
+              REPLACE="standard"
+            elif grep -R "case medium" project --include="*.swift"; then
+              REPLACE="medium"
+            elif grep -R "case normal" project --include="*.swift"; then
+              REPLACE="normal"
+            elif grep -R "case basic" project --include="*.swift"; then
+              REPLACE="basic"
+            else
+              REPLACE=$(grep -R "case " project --include="*.swift" | grep "OpticalFlowQuality" -A 20 | sed -n 's/.*case \([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
+            fi
+
+            echo "Replacing .balanced with .$REPLACE"
+            test -n "$REPLACE"
+
+            find project -name "*.swift" -print0 | xargs -0 sed -i '' "s/OpticalFlowQuality = \.balanced/OpticalFlowQuality = .$REPLACE/g"
+          else
+            echo "No .balanced OpticalFlowQuality default found."
+          fi
+
       - name: Build app
         run: |
+          set -e
           cd project
           WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
           PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
@@ -38,7 +66,10 @@ jobs:
             FILE="$PROJECT"
           fi
 
+          test -n "$FILE"
+
           SCHEME=$(xcodebuild -list $TYPE "$FILE" | awk '/Schemes:/{f=1;next} f && NF {print $1; exit}')
+          test -n "$SCHEME"
 
           echo "Using file: $FILE"
           echo "Using scheme: $SCHEME"
@@ -54,6 +85,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
+          set -e
           mkdir -p output/Payload
           APP=$(find build -name "*.app" -type d | head -n 1)
           echo "Found app: $APP"
@@ -93,13 +125,17 @@ jobs:
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print)
+
           if [ -z "$ZIP_FILES" ]; then
             echo "No source zip found to delete."
             exit 0
           fi
+
           echo "$ZIP_FILES" | while read -r file; do
             git rm "$file"
           done
+
           git commit -m "Delete source project zip after successful build"
           git push
