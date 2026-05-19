@@ -15,6 +15,7 @@ jobs:
         run: |
           mkdir -p project
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          echo "Using ZIP: $ZIP"
           unzip -q "$ZIP" -d project
           find project -name "*.xcodeproj" -o -name "*.xcworkspace"
 
@@ -46,13 +47,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             BUILD_DIR="$PWD/../build"
 
-      - name: Collect app
+      - name: Collect and zip app
         run: |
           mkdir -p output
-          cp -R build/Release-iphoneos/*.app output/
+          APP=$(find build -name "*.app" -type d | head -n 1)
+          echo "Found app: $APP"
+          test -n "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" output/Buzhen-app.zip
 
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:
           name: Buzhen-app
-          path: output/*.app
+          path: output/Buzhen-app.zip
