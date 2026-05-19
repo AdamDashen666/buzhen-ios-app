@@ -19,7 +19,7 @@ jobs:
         run: |
           set -e
           mkdir -p project logs
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V | tail -n 1)
           echo "Using ZIP: $ZIP" | tee logs/input-zip.txt
           test -n "$ZIP"
           unzip -q "$ZIP" -d project
