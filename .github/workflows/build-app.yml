@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build iOS IPA and Mac DMG
 
 on:
   workflow_dispatch:
@@ -26,10 +26,9 @@ jobs:
           find project -name "*.xcodeproj" -o -name "*.xcworkspace" | tee logs/project-files.txt
           find project -maxdepth 4 -type f | sort > logs/project-file-list.txt
 
-      - name: Build app
+      - name: Resolve Xcode project
         run: |
           set -e
-          mkdir -p "$GITHUB_WORKSPACE/logs"
           cd project
           WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
           PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
@@ -43,51 +42,46 @@ jobs:
           fi
 
           test -n "$FILE"
+          echo "TYPE=$TYPE" >> "$GITHUB_ENV"
+          echo "FILE=$FILE" >> "$GITHUB_ENV"
 
           echo "Using file: $FILE" | tee "$GITHUB_WORKSPACE/logs/build-summary.txt"
           xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt"
           SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt")
           test -n "$SCHEME"
-
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
           echo "Using scheme: $SCHEME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
           xcodebuild -version | tee "$GITHUB_WORKSPACE/logs/xcode-version.txt"
           xcode-select -p | tee "$GITHUB_WORKSPACE/logs/xcode-select.txt"
 
+      - name: Build iOS app
+        run: |
           set +e
+          cd project
           xcodebuild build \
             $TYPE "$FILE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
-            -resultBundlePath "$GITHUB_WORKSPACE/logs/Build.xcresult" \
+            -resultBundlePath "$GITHUB_WORKSPACE/logs/iOS-Build.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
-            BUILD_DIR="$PWD/../build" \
-            2>&1 | tee "$GITHUB_WORKSPACE/logs/xcodebuild.log"
+            BUILD_DIR="$PWD/../build-ios" \
+            2>&1 | tee "$GITHUB_WORKSPACE/logs/ios-xcodebuild.log"
 
           STATUS=${PIPESTATUS[0]}
-
-          echo "xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          echo "========== REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt"
-          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt" || true
-          echo "=================================" | tee -a "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt"
-
+          echo "iOS xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          echo "========== iOS REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt"
+          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/ios-xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt" || true
+          echo "=====================================" | tee -a "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt"
           exit $STATUS
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Build-logs-${{ github.run_number }}
-          path: logs/**
-          retention-days: 7
 
       - name: Package unsigned IPA
         run: |
           set -e
           mkdir -p output/Payload
-          APP=$(find build -name "*.app" -type d | head -n 1)
-          echo "Found app: $APP"
+          APP=$(find build-ios -name "*.app" -type d | head -n 1)
+          echo "Found iOS app: $APP"
           test -n "$APP"
           cp -R "$APP" output/Payload/
           cd output
@@ -102,15 +96,69 @@ jobs:
           path: output/Buzhen-unsigned.ipa
           retention-days: 7
 
-      - name: Keep latest 3 IPA artifacts
+      - name: Build Mac Catalyst app
+        run: |
+          set +e
+          cd project
+          xcodebuild build \
+            $TYPE "$FILE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk macosx \
+            -destination "platform=macOS,variant=Mac Catalyst" \
+            -resultBundlePath "$GITHUB_WORKSPACE/logs/Mac-Build.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            SUPPORTS_MACCATALYST=YES \
+            BUILD_DIR="$PWD/../build-mac" \
+            2>&1 | tee "$GITHUB_WORKSPACE/logs/mac-xcodebuild.log"
+
+          STATUS=${PIPESTATUS[0]}
+          echo "Mac xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          echo "========== Mac REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt"
+          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/mac-xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt" || true
+          echo "=====================================" | tee -a "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt"
+          exit $STATUS
+
+      - name: Package Mac DMG
+        run: |
+          set -e
+          mkdir -p output/mac-dmg-root
+          MAC_APP=$(find build-mac -name "*.app" -type d | head -n 1)
+          echo "Found Mac app: $MAC_APP"
+          test -n "$MAC_APP"
+          cp -R "$MAC_APP" output/mac-dmg-root/
+          hdiutil create \
+            -volname "Buzhen Local" \
+            -srcfolder output/mac-dmg-root \
+            -ov \
+            -format UDZO \
+            output/Buzhen-Local-Mac.dmg
+          ls -lh output/Buzhen-Local-Mac.dmg
+
+      - name: Upload Mac DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Buzhen-Mac-DMG-${{ github.run_number }}
+          path: output/Buzhen-Local-Mac.dmg
+          retention-days: 7
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-logs-${{ github.run_number }}
+          path: logs/**
+          retention-days: 7
+
+      - name: Keep latest 3 app artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           gh api repos/${{ github.repository }}/actions/artifacts --paginate \
-            --jq '.artifacts[] | select(.name | startswith("Buzhen-unsigned-ipa")) | [.created_at, .id] | @tsv' \
+            --jq '.artifacts[] | select((.name | startswith("Buzhen-unsigned-ipa")) or (.name | startswith("Buzhen-Mac-DMG"))) | [.created_at, .id] | @tsv' \
             | sort -r \
-            | tail -n +4 \
+            | tail -n +7 \
             | cut -f2 \
             | while read -r artifact_id; do
                 if [ -n "$artifact_id" ]; then
