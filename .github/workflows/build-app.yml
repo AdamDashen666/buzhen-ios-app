@@ -1,4 +1,4 @@
-name: Build iOS IPA and Mac DMG
+name: Build all ZIPs to iOS IPA
 
 on:
   workflow_dispatch:
@@ -15,131 +15,105 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Unzip project
+      - name: Build every project zip into IPA
         run: |
           set -e
-          mkdir -p project logs
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V | tail -n 1)
-          echo "Using ZIP: $ZIP" | tee logs/input-zip.txt
-          test -n "$ZIP"
-          unzip -q "$ZIP" -d project
-          find project -name "*.xcodeproj" -o -name "*.xcworkspace" | tee logs/project-files.txt
-          find project -maxdepth 4 -type f | sort > logs/project-file-list.txt
+          mkdir -p logs output work build
 
-      - name: Resolve Xcode project
-        run: |
-          set -e
-          cd project
-          WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
-          PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
+          ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V)
+          ZIP_COUNT=$(echo "$ZIP_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
 
-          if [ -n "$WORKSPACE" ]; then
-            TYPE="-workspace"
-            FILE="$WORKSPACE"
-          else
-            TYPE="-project"
-            FILE="$PROJECT"
-          fi
+          echo "Found ZIP count: $ZIP_COUNT" | tee logs/build-summary.txt
+          echo "$ZIP_FILES" | tee logs/input-zips.txt
+          test "$ZIP_COUNT" -gt 0
 
-          test -n "$FILE"
-          echo "TYPE=$TYPE" >> "$GITHUB_ENV"
-          echo "FILE=$FILE" >> "$GITHUB_ENV"
+          xcodebuild -version | tee logs/xcode-version.txt
+          xcode-select -p | tee logs/xcode-select.txt
 
-          echo "Using file: $FILE" | tee "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt"
-          SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt")
-          test -n "$SCHEME"
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-          echo "Using scheme: $SCHEME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          xcodebuild -version | tee "$GITHUB_WORKSPACE/logs/xcode-version.txt"
-          xcode-select -p | tee "$GITHUB_WORKSPACE/logs/xcode-select.txt"
+          echo "$ZIP_FILES" | while IFS= read -r ZIP; do
+            [ -n "$ZIP" ] || continue
 
-      - name: Build iOS app
-        run: |
-          set +e
-          cd project
-          xcodebuild build \
-            $TYPE "$FILE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -resultBundlePath "$GITHUB_WORKSPACE/logs/iOS-Build.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            BUILD_DIR="$PWD/../build-ios" \
-            2>&1 | tee "$GITHUB_WORKSPACE/logs/ios-xcodebuild.log"
+            BASENAME=$(basename "$ZIP" .zip)
+            SAFE_NAME=$(echo "$BASENAME" | tr -cd 'A-Za-z0-9._-')
+            PROJECT_DIR="$GITHUB_WORKSPACE/work/$SAFE_NAME"
+            BUILD_DIR="$GITHUB_WORKSPACE/build/$SAFE_NAME"
+            PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$SAFE_NAME"
+            IPA_PATH="$GITHUB_WORKSPACE/output/${SAFE_NAME}-unsigned.ipa"
+            ZIP_LOG_DIR="$GITHUB_WORKSPACE/logs/$SAFE_NAME"
 
-          STATUS=${PIPESTATUS[0]}
-          echo "iOS xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          echo "========== iOS REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt"
-          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/ios-xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt" || true
-          echo "=====================================" | tee -a "$GITHUB_WORKSPACE/logs/ios-xcodebuild-errors.txt"
-          exit $STATUS
+            mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$PAYLOAD_DIR/Payload" "$ZIP_LOG_DIR"
 
-      - name: Package unsigned IPA
-        run: |
-          set -e
-          mkdir -p output/Payload
-          APP=$(find build-ios -name "*.app" -type d | head -n 1)
-          echo "Found iOS app: $APP"
-          test -n "$APP"
-          cp -R "$APP" output/Payload/
-          cd output
-          /usr/bin/zip -qry Buzhen-unsigned.ipa Payload
-          cd ..
-          ls -lh output/Buzhen-unsigned.ipa
+            echo "========== BUILDING $ZIP ==========" | tee -a logs/build-summary.txt
+            echo "Using ZIP: $ZIP" | tee "$ZIP_LOG_DIR/input-zip.txt"
 
-      - name: Upload IPA artifact
+            unzip -q "$ZIP" -d "$PROJECT_DIR"
+            find "$PROJECT_DIR" -name "*.xcodeproj" -o -name "*.xcworkspace" | tee "$ZIP_LOG_DIR/project-files.txt"
+            find "$PROJECT_DIR" -maxdepth 5 -type f | sort > "$ZIP_LOG_DIR/project-file-list.txt"
+
+            cd "$PROJECT_DIR"
+            WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
+            PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
+
+            if [ -n "$WORKSPACE" ]; then
+              TYPE="-workspace"
+              FILE="$WORKSPACE"
+            else
+              TYPE="-project"
+              FILE="$PROJECT"
+            fi
+
+            test -n "$FILE"
+
+            echo "Using file: $FILE" | tee "$ZIP_LOG_DIR/xcodebuild-target.txt"
+            xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$ZIP_LOG_DIR/xcodebuild-list.txt"
+            SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$ZIP_LOG_DIR/xcodebuild-list.txt")
+            test -n "$SCHEME"
+            echo "Using scheme: $SCHEME" | tee -a "$ZIP_LOG_DIR/xcodebuild-target.txt"
+
+            set +e
+            xcodebuild build \
+              $TYPE "$FILE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -resultBundlePath "$ZIP_LOG_DIR/iOS-Build.xcresult" \
+              CODE_SIGNING_ALLOWED=NO \
+              BUILD_DIR="$BUILD_DIR" \
+              2>&1 | tee "$ZIP_LOG_DIR/xcodebuild.log"
+
+            STATUS=${PIPESTATUS[0]}
+            set -e
+
+            echo "$SAFE_NAME xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            echo "========== $SAFE_NAME REAL ERRORS ==========" | tee "$ZIP_LOG_DIR/xcodebuild-errors.txt"
+            grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$ZIP_LOG_DIR/xcodebuild.log" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt" || true
+            echo "============================================" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt"
+
+            if [ "$STATUS" -ne 0 ]; then
+              exit "$STATUS"
+            fi
+
+            APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+            echo "Found app: $APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            test -n "$APP"
+
+            cp -R "$APP" "$PAYLOAD_DIR/Payload/"
+            cd "$PAYLOAD_DIR"
+            /usr/bin/zip -qry "$IPA_PATH" Payload
+            cd "$GITHUB_WORKSPACE"
+            rm -rf "$PAYLOAD_DIR"
+            ls -lh "$IPA_PATH" | tee -a logs/build-summary.txt
+          done
+
+          echo "========== OUTPUT IPAS ==========" | tee -a logs/build-summary.txt
+          ls -lh output/*.ipa | tee -a logs/build-summary.txt
+
+      - name: Upload IPA artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Buzhen-unsigned-ipa-${{ github.run_number }}
-          path: output/Buzhen-unsigned.ipa
-          retention-days: 7
-
-      - name: Build Mac Catalyst app
-        run: |
-          set +e
-          cd project
-          xcodebuild build \
-            $TYPE "$FILE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk macosx \
-            -destination "platform=macOS,variant=Mac Catalyst" \
-            -resultBundlePath "$GITHUB_WORKSPACE/logs/Mac-Build.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            SUPPORTS_MACCATALYST=YES \
-            BUILD_DIR="$PWD/../build-mac" \
-            2>&1 | tee "$GITHUB_WORKSPACE/logs/mac-xcodebuild.log"
-
-          STATUS=${PIPESTATUS[0]}
-          echo "Mac xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          echo "========== Mac REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt"
-          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/mac-xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt" || true
-          echo "=====================================" | tee -a "$GITHUB_WORKSPACE/logs/mac-xcodebuild-errors.txt"
-          exit $STATUS
-
-      - name: Package Mac DMG
-        run: |
-          set -e
-          mkdir -p output/mac-dmg-root
-          MAC_APP=$(find build-mac -name "*.app" -type d | head -n 1)
-          echo "Found Mac app: $MAC_APP"
-          test -n "$MAC_APP"
-          cp -R "$MAC_APP" output/mac-dmg-root/
-          hdiutil create \
-            -volname "Buzhen Local" \
-            -srcfolder output/mac-dmg-root \
-            -ov \
-            -format UDZO \
-            output/Buzhen-Local-Mac.dmg
-          ls -lh output/Buzhen-Local-Mac.dmg
-
-      - name: Upload Mac DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Buzhen-Mac-DMG-${{ github.run_number }}
-          path: output/Buzhen-Local-Mac.dmg
+          name: Buzhen-all-unsigned-ipas-${{ github.run_number }}
+          path: output/*.ipa
           retention-days: 7
 
       - name: Upload build logs
@@ -150,15 +124,15 @@ jobs:
           path: logs/**
           retention-days: 7
 
-      - name: Keep latest 3 app artifacts
+      - name: Keep latest 3 IPA artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           gh api repos/${{ github.repository }}/actions/artifacts --paginate \
-            --jq '.artifacts[] | select((.name | startswith("Buzhen-unsigned-ipa")) or (.name | startswith("Buzhen-Mac-DMG"))) | [.created_at, .id] | @tsv' \
+            --jq '.artifacts[] | select(.name | startswith("Buzhen-all-unsigned-ipas")) | [.created_at, .id] | @tsv' \
             | sort -r \
-            | tail -n +7 \
+            | tail -n +4 \
             | cut -f2 \
             | while read -r artifact_id; do
                 if [ -n "$artifact_id" ]; then
@@ -167,7 +141,7 @@ jobs:
                 fi
               done
 
-      - name: Delete source project zip from repo
+      - name: Delete all source project zips from repo
         run: |
           set -e
           git config user.name "github-actions[bot]"
@@ -184,5 +158,5 @@ jobs:
             git rm "$file"
           done
 
-          git commit -m "Delete source project zip after successful build"
+          git commit -m "Delete all source project zips after successful IPA builds"
           git push
