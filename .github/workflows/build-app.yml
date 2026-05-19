@@ -1,4 +1,4 @@
-name: Build iOS .app
+name: Build iOS IPA
 
 on:
   workflow_dispatch:
@@ -52,19 +52,23 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             BUILD_DIR="$PWD/../build"
 
-      - name: Collect and zip app
+      - name: Package unsigned IPA
         run: |
-          mkdir -p output
+          mkdir -p output/Payload
           APP=$(find build -name "*.app" -type d | head -n 1)
           echo "Found app: $APP"
           test -n "$APP"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" output/Buzhen-app.zip
+          cp -R "$APP" output/Payload/
+          cd output
+          /usr/bin/zip -qry Buzhen-unsigned.ipa Payload
+          cd ..
+          ls -lh output/Buzhen-unsigned.ipa
 
-      - name: Upload app
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Buzhen-app
-          path: output/Buzhen-app.zip
+          name: Buzhen-unsigned-ipa
+          path: output/Buzhen-unsigned.ipa
 
       - name: Delete source project zip from repo
         run: |
