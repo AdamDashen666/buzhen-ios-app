@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 jobs:
   build:
@@ -67,8 +67,26 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Buzhen-unsigned-ipa
+          name: Buzhen-unsigned-ipa-${{ github.run_number }}
           path: output/Buzhen-unsigned.ipa
+          retention-days: 7
+
+      - name: Keep latest 3 IPA artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh api repos/${{ github.repository }}/actions/artifacts --paginate \
+            --jq '.artifacts[] | select(.name | startswith("Buzhen-unsigned-ipa")) | [.created_at, .id] | @tsv' \
+            | sort -r \
+            | tail -n +4 \
+            | cut -f2 \
+            | while read -r artifact_id; do
+                if [ -n "$artifact_id" ]; then
+                  echo "Deleting old artifact $artifact_id"
+                  gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$artifact_id
+                fi
+              done
 
       - name: Delete source project zip from repo
         run: |
