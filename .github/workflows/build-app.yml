@@ -1,0 +1,36 @@
+name: Build iOS App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: List project
+        run: xcodebuild -list
+
+      - name: Build archive
+        run: |
+          xcodebuild archive \
+            -project Buzhen.xcodeproj \
+            -scheme Buzhen \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/Buzhen.xcarchive \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Copy app
+        run: |
+          mkdir output
+          cp -R build/Buzhen.xcarchive/Products/Applications/*.app output/
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Buzhen-app
+          path: output/*.app
