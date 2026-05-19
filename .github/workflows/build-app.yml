@@ -18,19 +18,20 @@ jobs:
       - name: Unzip project
         run: |
           set -e
-          mkdir -p project
+          mkdir -p project logs
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
-          echo "Using ZIP: $ZIP"
+          echo "Using ZIP: $ZIP" | tee logs/input-zip.txt
           test -n "$ZIP"
           unzip -q "$ZIP" -d project
-          find project -name "*.xcodeproj" -o -name "*.xcworkspace"
+          find project -name "*.xcodeproj" -o -name "*.xcworkspace" | tee logs/project-files.txt
+          find project -maxdepth 4 -type f | sort > logs/project-file-list.txt
 
       - name: Fix Swift compile error
         run: |
           set -e
-          echo "Fixing OpticalFlowQuality .balanced error..."
+          echo "Fixing OpticalFlowQuality .balanced error..." | tee logs/fix-swift.log
 
-          if grep -R "OpticalFlowQuality = \.balanced" project --include="*.swift"; then
+          if grep -R "OpticalFlowQuality = \.balanced" project --include="*.swift" | tee -a logs/fix-swift.log; then
             if grep -R "case standard" project --include="*.swift"; then
               REPLACE="standard"
             elif grep -R "case medium" project --include="*.swift"; then
@@ -43,17 +44,18 @@ jobs:
               REPLACE=$(grep -R "case " project --include="*.swift" | grep "OpticalFlowQuality" -A 20 | sed -n 's/.*case \([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
             fi
 
-            echo "Replacing .balanced with .$REPLACE"
+            echo "Replacing .balanced with .$REPLACE" | tee -a logs/fix-swift.log
             test -n "$REPLACE"
 
             find project -name "*.swift" -print0 | xargs -0 sed -i '' "s/OpticalFlowQuality = \.balanced/OpticalFlowQuality = .$REPLACE/g"
           else
-            echo "No .balanced OpticalFlowQuality default found."
+            echo "No .balanced OpticalFlowQuality default found." | tee -a logs/fix-swift.log
           fi
 
       - name: Build app
         run: |
           set -e
+          mkdir -p "$GITHUB_WORKSPACE/logs"
           cd project
           WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
           PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
@@ -68,20 +70,43 @@ jobs:
 
           test -n "$FILE"
 
-          SCHEME=$(xcodebuild -list $TYPE "$FILE" | awk '/Schemes:/{f=1;next} f && NF {print $1; exit}')
+          echo "Using file: $FILE" | tee "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt"
+          SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$GITHUB_WORKSPACE/logs/xcodebuild-list.txt")
           test -n "$SCHEME"
 
-          echo "Using file: $FILE"
-          echo "Using scheme: $SCHEME"
+          echo "Using scheme: $SCHEME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          xcodebuild -version | tee "$GITHUB_WORKSPACE/logs/xcode-version.txt"
+          xcode-select -p | tee "$GITHUB_WORKSPACE/logs/xcode-select.txt"
 
+          set +e
           xcodebuild build \
             $TYPE "$FILE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
+            -resultBundlePath "$GITHUB_WORKSPACE/logs/Build.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
-            BUILD_DIR="$PWD/../build"
+            BUILD_DIR="$PWD/../build" \
+            2>&1 | tee "$GITHUB_WORKSPACE/logs/xcodebuild.log"
+
+          STATUS=${PIPESTATUS[0]}
+
+          echo "xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          echo "========== REAL ERRORS ==========" | tee "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt"
+          grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$GITHUB_WORKSPACE/logs/xcodebuild.log" | tee -a "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt" || true
+          echo "=================================" | tee -a "$GITHUB_WORKSPACE/logs/xcodebuild-errors.txt"
+
+          exit $STATUS
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-logs-${{ github.run_number }}
+          path: logs/**
+          retention-days: 7
 
       - name: Package unsigned IPA
         run: |
