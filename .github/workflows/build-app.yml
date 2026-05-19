@@ -104,14 +104,23 @@ jobs:
               echo "Found Mac app: $MAC_APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
               test -n "$MAC_APP"
 
+              echo "Preparing ad-hoc signed Mac app..." | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+              xattr -cr "$MAC_APP" || true
+              chmod -R u+rwX,go+rX "$MAC_APP" || true
+              find "$MAC_APP" -type f -perm -111 -print -exec chmod +x {} \; || true
+              codesign --force --deep --sign - --timestamp=none "$MAC_APP" 2>&1 | tee "$ZIP_LOG_DIR/codesign.log"
+              codesign --verify --deep --strict --verbose=2 "$MAC_APP" 2>&1 | tee "$ZIP_LOG_DIR/codesign-verify.log" || true
+
               mkdir -p "$DMG_ROOT"
               cp -R "$MAC_APP" "$DMG_ROOT/"
+              ln -s /Applications "$DMG_ROOT/Applications"
               hdiutil create \
                 -volname "$SAFE_NAME" \
                 -srcfolder "$DMG_ROOT" \
                 -ov \
                 -format UDZO \
                 "$DMG_PATH"
+              hdiutil verify "$DMG_PATH" 2>&1 | tee "$ZIP_LOG_DIR/dmg-verify.log"
               rm -rf "$DMG_ROOT"
               ls -lh "$DMG_PATH" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
             else
