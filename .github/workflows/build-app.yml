@@ -26,32 +26,6 @@ jobs:
           find project -name "*.xcodeproj" -o -name "*.xcworkspace" | tee logs/project-files.txt
           find project -maxdepth 4 -type f | sort > logs/project-file-list.txt
 
-      - name: Fix Swift compile error
-        run: |
-          set -e
-          echo "Fixing OpticalFlowQuality .balanced error..." | tee logs/fix-swift.log
-
-          if grep -R "OpticalFlowQuality = \.balanced" project --include="*.swift" | tee -a logs/fix-swift.log; then
-            if grep -R "case standard" project --include="*.swift"; then
-              REPLACE="standard"
-            elif grep -R "case medium" project --include="*.swift"; then
-              REPLACE="medium"
-            elif grep -R "case normal" project --include="*.swift"; then
-              REPLACE="normal"
-            elif grep -R "case basic" project --include="*.swift"; then
-              REPLACE="basic"
-            else
-              REPLACE=$(grep -R "case " project --include="*.swift" | grep "OpticalFlowQuality" -A 20 | sed -n 's/.*case \([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
-            fi
-
-            echo "Replacing .balanced with .$REPLACE" | tee -a logs/fix-swift.log
-            test -n "$REPLACE"
-
-            find project -name "*.swift" -print0 | xargs -0 sed -i '' "s/OpticalFlowQuality = \.balanced/OpticalFlowQuality = .$REPLACE/g"
-          else
-            echo "No .balanced OpticalFlowQuality default found." | tee -a logs/fix-swift.log
-          fi
-
       - name: Build app
         run: |
           set -e
