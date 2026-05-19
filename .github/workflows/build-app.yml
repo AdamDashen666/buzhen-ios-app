@@ -3,6 +3,10 @@ name: Build iOS .app
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build:
     runs-on: macos-26
@@ -16,6 +20,7 @@ jobs:
           mkdir -p project
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
           echo "Using ZIP: $ZIP"
+          test -n "$ZIP"
           unzip -q "$ZIP" -d project
           find project -name "*.xcodeproj" -o -name "*.xcworkspace"
 
@@ -60,3 +65,19 @@ jobs:
         with:
           name: Buzhen-app
           path: output/Buzhen-app.zip
+
+      - name: Delete source project zip from repo
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print)
+          if [ -z "$ZIP_FILES" ]; then
+            echo "No source zip found to delete."
+            exit 0
+          fi
+          echo "$ZIP_FILES" | while read -r file; do
+            git rm "$file"
+          done
+          git commit -m "Delete source project zip after successful build"
+          git push
