@@ -1,4 +1,4 @@
-name: Build iOS App
+name: Build iOS .app
 
 on:
   workflow_dispatch:
@@ -11,23 +11,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: List project
-        run: xcodebuild -list
-
-      - name: Build archive
+      - name: Unzip project
         run: |
-          xcodebuild archive \
-            -project Buzhen.xcodeproj \
-            -scheme Buzhen \
+          mkdir -p project
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          unzip -q "$ZIP" -d project
+          find project -name "*.xcodeproj" -o -name "*.xcworkspace"
+
+      - name: Build app
+        run: |
+          cd project
+          WORKSPACE=$(find . -name "*.xcworkspace" | head -n 1)
+          PROJECT=$(find . -name "*.xcodeproj" | head -n 1)
+
+          if [ -n "$WORKSPACE" ]; then
+            TYPE="-workspace"
+            FILE="$WORKSPACE"
+          else
+            TYPE="-project"
+            FILE="$PROJECT"
+          fi
+
+          SCHEME=$(xcodebuild -list $TYPE "$FILE" | awk '/Schemes:/{f=1;next} f && NF {print $1; exit}')
+
+          echo "Using file: $FILE"
+          echo "Using scheme: $SCHEME"
+
+          xcodebuild build \
+            $TYPE "$FILE" \
+            -scheme "$SCHEME" \
             -configuration Release \
+            -sdk iphoneos \
             -destination "generic/platform=iOS" \
-            -archivePath build/Buzhen.xcarchive \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            BUILD_DIR="$PWD/../build"
 
-      - name: Copy app
+      - name: Collect app
         run: |
-          mkdir output
-          cp -R build/Buzhen.xcarchive/Products/Applications/*.app output/
+          mkdir -p output
+          cp -R build/Release-iphoneos/*.app output/
 
       - name: Upload app
         uses: actions/upload-artifact@v4
