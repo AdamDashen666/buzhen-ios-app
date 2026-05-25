@@ -19,6 +19,8 @@ jobs:
         run: |
           set -e
           mkdir -p logs output work build
+          : > logs/current-zip.txt
+          : > logs/failed-zip.txt
 
           ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V)
           ZIP_COUNT=$(echo "$ZIP_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -30,8 +32,10 @@ jobs:
           xcodebuild -version | tee logs/xcode-version.txt
           xcode-select -p | tee logs/xcode-select.txt
 
-          echo "$ZIP_FILES" | while IFS= read -r ZIP; do
+          while IFS= read -r ZIP; do
             [ -n "$ZIP" ] || continue
+
+            echo "$ZIP" > "$GITHUB_WORKSPACE/logs/current-zip.txt"
 
             BASENAME=$(basename "$ZIP" .zip)
             SAFE_NAME=$(echo "$BASENAME" | tr -cd 'A-Za-z0-9._-')
@@ -94,6 +98,7 @@ jobs:
               echo "===============================================" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt"
 
               if [ "$STATUS" -ne 0 ]; then
+                echo "$ZIP" > "$GITHUB_WORKSPACE/logs/failed-zip.txt"
                 exit "$STATUS"
               fi
 
@@ -147,6 +152,7 @@ jobs:
               echo "===============================================" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt"
 
               if [ "$STATUS" -ne 0 ]; then
+                echo "$ZIP" > "$GITHUB_WORKSPACE/logs/failed-zip.txt"
                 exit "$STATUS"
               fi
 
@@ -167,7 +173,9 @@ jobs:
             fi
 
             cd "$GITHUB_WORKSPACE"
-          done
+          done <<< "$ZIP_FILES"
+
+          : > logs/current-zip.txt
 
           echo "========== OUTPUT FILES ==========" | tee -a logs/build-summary.txt
           find output -maxdepth 1 \( -name "*.ipa" -o -name "*.dmg" \) -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
@@ -188,6 +196,37 @@ jobs:
           name: Build-logs-${{ github.run_number }}
           path: logs/**
           retention-days: 7
+
+      - name: Delete failed source project zip from repo
+        if: failure()
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          FAILED_ZIP=""
+          if [ -f logs/failed-zip.txt ]; then
+            FAILED_ZIP=$(head -n 1 logs/failed-zip.txt | tr -d '\r')
+          fi
+          if [ -z "$FAILED_ZIP" ] && [ -f logs/current-zip.txt ]; then
+            FAILED_ZIP=$(head -n 1 logs/current-zip.txt | tr -d '\r')
+          fi
+
+          FAILED_ZIP=${FAILED_ZIP#./}
+
+          if [ -z "$FAILED_ZIP" ]; then
+            echo "No failed source zip recorded."
+            exit 0
+          fi
+
+          if [ ! -f "$FAILED_ZIP" ]; then
+            echo "Recorded failed zip not found in repo: $FAILED_ZIP"
+            exit 0
+          fi
+
+          git rm -- "$FAILED_ZIP"
+          git commit -m "Delete failed source zip: $FAILED_ZIP"
+          git push
 
       - name: Keep latest 3 built app artifacts
         env:
