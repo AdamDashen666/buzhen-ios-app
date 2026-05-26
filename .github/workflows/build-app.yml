@@ -42,6 +42,23 @@ jobs:
           : > logs/current-zip.txt
           : > logs/failed-zip.txt
 
+          B64_FILES=$(find . -maxdepth 1 -type f -name "*.zip.b64" -print | sort -V)
+          if [ -n "$B64_FILES" ]; then
+            echo "Found base64 ZIP sources:" | tee logs/base64-zips.txt
+            echo "$B64_FILES" | tee -a logs/base64-zips.txt
+            while IFS= read -r B64; do
+              [ -n "$B64" ] || continue
+              ZIP="${B64%.b64}"
+              echo "Decoding $B64 -> $ZIP" | tee -a logs/build-summary.txt
+              if base64 --decode "$B64" > "$ZIP" 2>/dev/null; then
+                true
+              else
+                base64 -D -i "$B64" -o "$ZIP"
+              fi
+              unzip -tq "$ZIP"
+            done <<< "$B64_FILES"
+          fi
+
           ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V)
           ZIP_COUNT=$(echo "$ZIP_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
 
@@ -244,12 +261,20 @@ jobs:
             exit 0
           fi
 
-          if [ ! -f "$FAILED_ZIP" ]; then
-            echo "Recorded failed zip not found in repo: $FAILED_ZIP"
+          CANDIDATES="$FAILED_ZIP ${FAILED_ZIP}.b64"
+          REMOVED=0
+          for file in $CANDIDATES; do
+            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+              git rm -- "$file"
+              REMOVED=1
+            fi
+          done
+
+          if [ "$REMOVED" -eq 0 ]; then
+            echo "No tracked failed source zip found for: $FAILED_ZIP"
             exit 0
           fi
 
-          git rm -- "$FAILED_ZIP"
           git commit -m "Delete failed source zip: $FAILED_ZIP"
           git push
 
@@ -281,16 +306,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print)
+          SOURCE_FILES=$(find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print)
 
-          if [ -z "$ZIP_FILES" ]; then
+          if [ -z "$SOURCE_FILES" ]; then
             echo "No source zip found to delete."
             exit 0
           fi
 
-          echo "$ZIP_FILES" | while read -r file; do
-            git rm "$file"
+          echo "$SOURCE_FILES" | while read -r file; do
+            file=${file#./}
+            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+              git rm "$file"
+            fi
           done
+
+          if git diff --cached --quiet; then
+            echo "No tracked source zip found to delete."
+            exit 0
+          fi
 
           git commit -m "Delete all source project zips after successful builds"
           git push
