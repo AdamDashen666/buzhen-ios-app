@@ -13,7 +13,27 @@ jobs:
 
     steps:
       - name: Checkout
+        id: checkout
+        continue-on-error: true
         uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Fallback download repo if checkout failed
+        if: steps.checkout.outcome == 'failure'
+        run: |
+          set -e
+          echo "actions/checkout failed. Falling back to downloading repository archive."
+          rm -rf fallback-repo fallback.zip
+          curl -L --retry 3 --fail \
+            "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip" \
+            -o fallback.zip
+          unzip -q fallback.zip -d fallback-repo
+          shopt -s dotglob
+          mv fallback-repo/*/* .
+          rm -rf fallback-repo fallback.zip
 
       - name: Build every project zip
         run: |
@@ -201,6 +221,11 @@ jobs:
         if: failure()
         run: |
           set -e
+          if [ ! -d .git ]; then
+            echo "Repository was loaded by fallback archive, not git checkout. Skip failed zip deletion."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -248,6 +273,11 @@ jobs:
       - name: Delete all source project zips from repo
         run: |
           set -e
+          if [ ! -d .git ]; then
+            echo "Repository was loaded by fallback archive, not git checkout. Skip source zip cleanup."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
