@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          echo "actions/checkout failed. Falling back to downloading repository archive."
+          echo "actions/checkout failed. Falling back to repository archive."
           rm -rf fallback-repo fallback.zip
           curl -L --retry 3 --fail \
             "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip" \
@@ -36,20 +36,24 @@ jobs:
           mv fallback-repo/*/* .
           rm -rf fallback-repo fallback.zip
 
-      - name: Build every project zip
+      - name: Build and package every project zip
         shell: bash
         run: |
           set -e
           mkdir -p logs output work build
           : > logs/current-zip.txt
           : > logs/failed-zip.txt
-          : > logs/built-source-zips.txt
+          : > logs/build-summary.txt
           rm -f logs/build-completed.txt logs/built-output-files.txt
+
+          echo "========== ENV ==========" | tee -a logs/build-summary.txt
+          xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcode-select -p | tee logs/xcode-select.txt | tee -a logs/build-summary.txt
 
           B64_FILES=$(find . -maxdepth 1 -type f -name "*.zip.b64" -print | sort -V)
           if [ -n "$B64_FILES" ]; then
-            echo "Found base64 ZIP sources:" | tee logs/base64-zips.txt
-            echo "$B64_FILES" | tee -a logs/base64-zips.txt
+            echo "========== DECODING BASE64 ZIPS ==========" | tee -a logs/build-summary.txt
+            echo "$B64_FILES" | tee logs/base64-zips.txt
             while IFS= read -r B64; do
               [ -n "$B64" ] || continue
               ZIP="${B64%.b64}"
@@ -66,16 +70,12 @@ jobs:
           ZIP_FILES=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V)
           ZIP_COUNT=$(echo "$ZIP_FILES" | sed '/^$/d' | wc -l | tr -d ' ')
 
-          echo "Found ZIP count: $ZIP_COUNT" | tee logs/build-summary.txt
+          echo "Found ZIP count: $ZIP_COUNT" | tee -a logs/build-summary.txt
           echo "$ZIP_FILES" | tee logs/input-zips.txt
           test "$ZIP_COUNT" -gt 0
 
-          xcodebuild -version | tee logs/xcode-version.txt
-          xcode-select -p | tee logs/xcode-select.txt
-
           while IFS= read -r ZIP; do
             [ -n "$ZIP" ] || continue
-
             echo "$ZIP" > "$GITHUB_WORKSPACE/logs/current-zip.txt"
 
             BASENAME=$(basename "$ZIP" .zip)
@@ -85,13 +85,12 @@ jobs:
             BUILD_DIR="$GITHUB_WORKSPACE/build/$SAFE_NAME"
             ZIP_LOG_DIR="$GITHUB_WORKSPACE/logs/$SAFE_NAME"
 
+            rm -rf "$PROJECT_DIR" "$BUILD_DIR" "$ZIP_LOG_DIR"
             mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$ZIP_LOG_DIR"
 
             echo "========== BUILDING $ZIP ==========" | tee -a logs/build-summary.txt
-            echo "Using ZIP: $ZIP" | tee "$ZIP_LOG_DIR/input-zip.txt"
-
             unzip -q "$ZIP" -d "$PROJECT_DIR"
-            find "$PROJECT_DIR" -name "*.xcodeproj" -o -name "*.xcworkspace" | tee "$ZIP_LOG_DIR/project-files.txt"
+            find "$PROJECT_DIR" \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | tee "$ZIP_LOG_DIR/project-files.txt"
             find "$PROJECT_DIR" -maxdepth 5 -type f | sort > "$ZIP_LOG_DIR/project-file-list.txt"
 
             cd "$PROJECT_DIR"
@@ -107,15 +106,15 @@ jobs:
             fi
 
             test -n "$FILE"
-
             echo "Using file: $FILE" | tee "$ZIP_LOG_DIR/xcodebuild-target.txt"
+
             xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$ZIP_LOG_DIR/xcodebuild-list.txt"
             SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$ZIP_LOG_DIR/xcodebuild-list.txt")
             test -n "$SCHEME"
             echo "Using scheme: $SCHEME" | tee -a "$ZIP_LOG_DIR/xcodebuild-target.txt"
 
             if [[ "$LOWER_NAME" == *mac* ]]; then
-              echo "Detected Mac ZIP by filename: $BASENAME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+              echo "Detected Mac project: $BASENAME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
 
               set +e
               xcodebuild build \
@@ -129,14 +128,11 @@ jobs:
                 SUPPORTS_MACCATALYST=YES \
                 BUILD_DIR="$BUILD_DIR" \
                 2>&1 | tee "$ZIP_LOG_DIR/xcodebuild.log"
-
               STATUS=${PIPESTATUS[0]}
               set -e
 
               echo "$SAFE_NAME Mac xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-              echo "========== $SAFE_NAME MAC REAL ERRORS ==========" | tee "$ZIP_LOG_DIR/xcodebuild-errors.txt"
-              grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$ZIP_LOG_DIR/xcodebuild.log" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt" || true
-              echo "===============================================" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt"
+              grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65" "$ZIP_LOG_DIR/xcodebuild.log" > "$ZIP_LOG_DIR/xcodebuild-errors.txt" || true
 
               if [ "$STATUS" -ne 0 ]; then
                 echo "$ZIP" > "$GITHUB_WORKSPACE/logs/failed-zip.txt"
@@ -144,13 +140,11 @@ jobs:
               fi
 
               MAC_APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+              test -n "$MAC_APP"
+
               DMG_ROOT="$GITHUB_WORKSPACE/output/dmg-root-$SAFE_NAME"
               DMG_PATH="$GITHUB_WORKSPACE/output/${SAFE_NAME}.dmg"
 
-              echo "Found Mac app: $MAC_APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-              test -n "$MAC_APP"
-
-              echo "Preparing ad-hoc signed Mac app..." | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
               xattr -cr "$MAC_APP" || true
               chmod -R u+rwX,go+rX "$MAC_APP" || true
               find "$MAC_APP" -type f -perm -111 -print -exec chmod +x {} \; || true
@@ -160,17 +154,12 @@ jobs:
               mkdir -p "$DMG_ROOT"
               cp -R "$MAC_APP" "$DMG_ROOT/"
               ln -s /Applications "$DMG_ROOT/Applications"
-              hdiutil create \
-                -volname "$SAFE_NAME" \
-                -srcfolder "$DMG_ROOT" \
-                -ov \
-                -format UDZO \
-                "$DMG_PATH"
+              hdiutil create -volname "$SAFE_NAME" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG_PATH"
               hdiutil verify "$DMG_PATH" 2>&1 | tee "$ZIP_LOG_DIR/dmg-verify.log"
               rm -rf "$DMG_ROOT"
               ls -lh "$DMG_PATH" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
             else
-              echo "Detected iOS ZIP by filename: $BASENAME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+              echo "Detected iOS project: $BASENAME" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
 
               set +e
               xcodebuild build \
@@ -183,14 +172,11 @@ jobs:
                 CODE_SIGNING_ALLOWED=NO \
                 BUILD_DIR="$BUILD_DIR" \
                 2>&1 | tee "$ZIP_LOG_DIR/xcodebuild.log"
-
               STATUS=${PIPESTATUS[0]}
               set -e
 
               echo "$SAFE_NAME iOS xcodebuild exit status: $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-              echo "========== $SAFE_NAME IOS REAL ERRORS ==========" | tee "$ZIP_LOG_DIR/xcodebuild-errors.txt"
-              grep -nEi "error:|fatal error:|build failed|failed|cannot find|no such module|undefined symbol|exit code 65" "$ZIP_LOG_DIR/xcodebuild.log" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt" || true
-              echo "===============================================" | tee -a "$ZIP_LOG_DIR/xcodebuild-errors.txt"
+              grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65" "$ZIP_LOG_DIR/xcodebuild.log" > "$ZIP_LOG_DIR/xcodebuild-errors.txt" || true
 
               if [ "$STATUS" -ne 0 ]; then
                 echo "$ZIP" > "$GITHUB_WORKSPACE/logs/failed-zip.txt"
@@ -198,11 +184,10 @@ jobs:
               fi
 
               APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+              test -n "$APP"
+
               PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$SAFE_NAME"
               IPA_PATH="$GITHUB_WORKSPACE/output/${SAFE_NAME}-unsigned.ipa"
-
-              echo "Found iOS app: $APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-              test -n "$APP"
 
               mkdir -p "$PAYLOAD_DIR/Payload"
               cp -R "$APP" "$PAYLOAD_DIR/Payload/"
@@ -213,7 +198,6 @@ jobs:
               ls -lh "$IPA_PATH" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
             fi
 
-            echo "$ZIP" >> "$GITHUB_WORKSPACE/logs/built-source-zips.txt"
             cd "$GITHUB_WORKSPACE"
           done <<< "$ZIP_FILES"
 
@@ -253,13 +237,19 @@ jobs:
             gh release upload "$RELEASE_TAG" "$file" --clobber
           done < "$BUILT_LIST"
 
-      - name: Upload build logs
+      - name: Add build summary to job page
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Build-logs-${{ github.run_number }}
-          path: logs/**
-          retention-days: 7
+        shell: bash
+        run: |
+          {
+            echo "## Build Summary"
+            echo
+            if [ -f logs/build-summary.txt ]; then
+              cat logs/build-summary.txt
+            else
+              echo "No build summary file generated."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Delete source project zips from repo
         if: always()
