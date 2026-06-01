@@ -1,6 +1,6 @@
 name: Build ZIPs to direct IPA or Mac DMG
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
@@ -23,6 +23,7 @@ jobs:
 
       - name: Fallback download repo if checkout failed
         if: steps.checkout.outcome == 'failure'
+        shell: bash
         run: |
           set -e
           echo "actions/checkout failed. Falling back to downloading repository archive."
@@ -36,6 +37,7 @@ jobs:
           rm -rf fallback-repo fallback.zip
 
       - name: Build every project zip
+        shell: bash
         run: |
           set -e
           mkdir -p logs output work build
@@ -221,6 +223,7 @@ jobs:
           find output -maxdepth 1 \( -name "*.ipa" -o -name "*.dmg" \) -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
 
       - name: Upload IPA/DMG as direct release downloads
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -239,6 +242,7 @@ jobs:
           echo "Release files:"
           cat "$BUILT_LIST"
 
+          gh release delete "$RELEASE_TAG" -y --cleanup-tag || true
           gh release create "$RELEASE_TAG" \
             --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
@@ -259,6 +263,7 @@ jobs:
 
       - name: Delete source project zips from repo
         if: always()
+        shell: bash
         run: |
           set -e
           if [ ! -d .git ]; then
@@ -269,14 +274,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          BUILD_COMPLETED=0
-          if [ -f logs/build-completed.txt ]; then
-            BUILD_COMPLETED=1
-          fi
+          DELETE_LIST=$(mktemp)
+          COMMIT_MESSAGE="Delete source project zips after workflow run"
 
-          if [ "$BUILD_COMPLETED" = "1" ]; then
+          if [ -f logs/build-completed.txt ]; then
             echo "Build completed. Delete all tracked source ZIP files."
-            SOURCE_FILES=$(find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print)
+            find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print > "$DELETE_LIST"
             COMMIT_MESSAGE="Delete all source project zips after build"
           else
             echo "Build did not complete. Delete only the failed/current source ZIP file."
@@ -287,30 +290,26 @@ jobs:
             if [ -z "$FAILED_ZIP" ] && [ -f logs/current-zip.txt ]; then
               FAILED_ZIP=$(head -n 1 logs/current-zip.txt | tr -d '\r')
             fi
-
             FAILED_ZIP=${FAILED_ZIP#./}
-            if [ -z "$FAILED_ZIP" ]; then
-              echo "No failed/current source zip recorded. Nothing to delete."
-              exit 0
-            fi
 
-            SOURCE_FILES="$FAILED_ZIP
-${FAILED_ZIP}.b64"
-            COMMIT_MESSAGE="Delete failed source zip: $FAILED_ZIP"
+            if [ -n "$FAILED_ZIP" ]; then
+              printf '%s\n' "$FAILED_ZIP" "${FAILED_ZIP}.b64" > "$DELETE_LIST"
+              COMMIT_MESSAGE="Delete failed source zip: $FAILED_ZIP"
+            fi
           fi
 
-          if [ -z "$SOURCE_FILES" ]; then
+          if [ ! -s "$DELETE_LIST" ]; then
             echo "No source zip found to delete."
             exit 0
           fi
 
-          echo "$SOURCE_FILES" | while IFS= read -r file; do
+          while IFS= read -r file; do
             [ -n "$file" ] || continue
             file=${file#./}
             if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
               git rm -- "$file"
             fi
-          done
+          done < "$DELETE_LIST"
 
           if git diff --cached --quiet; then
             echo "No tracked source zip found to delete."
@@ -322,6 +321,7 @@ ${FAILED_ZIP}.b64"
 
       - name: Keep latest 3 direct app releases
         if: always()
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -340,6 +340,7 @@ ${FAILED_ZIP}.b64"
 
       - name: Delete old built-app artifact zips
         if: always()
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
