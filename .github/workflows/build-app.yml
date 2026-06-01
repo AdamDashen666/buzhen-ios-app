@@ -41,6 +41,8 @@ jobs:
           mkdir -p logs output work build
           : > logs/current-zip.txt
           : > logs/failed-zip.txt
+          : > logs/built-source-zips.txt
+          rm -f logs/build-completed.txt logs/built-output-files.txt
 
           B64_FILES=$(find . -maxdepth 1 -type f -name "*.zip.b64" -print | sort -V)
           if [ -n "$B64_FILES" ]; then
@@ -209,10 +211,11 @@ jobs:
               ls -lh "$IPA_PATH" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
             fi
 
+            echo "$ZIP" >> "$GITHUB_WORKSPACE/logs/built-source-zips.txt"
             cd "$GITHUB_WORKSPACE"
           done <<< "$ZIP_FILES"
 
-          : > logs/current-zip.txt
+          echo "yes" > logs/build-completed.txt
 
           echo "========== OUTPUT FILES ==========" | tee -a logs/build-summary.txt
           find output -maxdepth 1 \( -name "*.ipa" -o -name "*.dmg" \) -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
@@ -222,22 +225,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          RELEASE_TAG="built-apps-${{ github.run_id }}"
+          RELEASE_TAG="built-apps-${{ github.run_id }}-${{ github.run_attempt }}"
           RELEASE_TITLE="Built Apps #${{ github.run_number }}"
           RELEASE_NOTES="Direct downloadable build outputs from GitHub Actions run ${{ github.run_number }}. Download the .ipa file from this release's Assets section."
+          BUILT_LIST="$GITHUB_WORKSPACE/logs/built-output-files.txt"
 
-          mapfile -t BUILT_FILES < <(find "$GITHUB_WORKSPACE/output" -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) | sort)
-          if [ "${#BUILT_FILES[@]}" -eq 0 ]; then
+          find "$GITHUB_WORKSPACE/output" -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) | sort > "$BUILT_LIST"
+          if [ ! -s "$BUILT_LIST" ]; then
             echo "No IPA or DMG files generated."
             exit 1
           fi
 
-          printf 'Release files:\n'
-          printf '%s\n' "${BUILT_FILES[@]}"
+          echo "Release files:"
+          cat "$BUILT_LIST"
 
-          gh release create "$RELEASE_TAG" "${BUILT_FILES[@]}" \
+          gh release create "$RELEASE_TAG" \
+            --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
             --notes "$RELEASE_NOTES"
+
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            gh release upload "$RELEASE_TAG" "$file" --clobber
+          done < "$BUILT_LIST"
 
       - name: Upload build logs
         if: always()
@@ -247,51 +257,71 @@ jobs:
           path: logs/**
           retention-days: 7
 
-      - name: Delete failed source project zip from repo
-        if: failure()
+      - name: Delete source project zips from repo
+        if: always()
         run: |
           set -e
           if [ ! -d .git ]; then
-            echo "Repository was loaded by fallback archive, not git checkout. Skip failed zip deletion."
+            echo "Repository was loaded by fallback archive, not git checkout. Skip source zip cleanup."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          FAILED_ZIP=""
-          if [ -f logs/failed-zip.txt ]; then
-            FAILED_ZIP=$(head -n 1 logs/failed-zip.txt | tr -d '\r')
-          fi
-          if [ -z "$FAILED_ZIP" ] && [ -f logs/current-zip.txt ]; then
-            FAILED_ZIP=$(head -n 1 logs/current-zip.txt | tr -d '\r')
+          BUILD_COMPLETED=0
+          if [ -f logs/build-completed.txt ]; then
+            BUILD_COMPLETED=1
           fi
 
-          FAILED_ZIP=${FAILED_ZIP#./}
+          if [ "$BUILD_COMPLETED" = "1" ]; then
+            echo "Build completed. Delete all tracked source ZIP files."
+            SOURCE_FILES=$(find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print)
+            COMMIT_MESSAGE="Delete all source project zips after build"
+          else
+            echo "Build did not complete. Delete only the failed/current source ZIP file."
+            FAILED_ZIP=""
+            if [ -f logs/failed-zip.txt ]; then
+              FAILED_ZIP=$(head -n 1 logs/failed-zip.txt | tr -d '\r')
+            fi
+            if [ -z "$FAILED_ZIP" ] && [ -f logs/current-zip.txt ]; then
+              FAILED_ZIP=$(head -n 1 logs/current-zip.txt | tr -d '\r')
+            fi
 
-          if [ -z "$FAILED_ZIP" ]; then
-            echo "No failed source zip recorded."
+            FAILED_ZIP=${FAILED_ZIP#./}
+            if [ -z "$FAILED_ZIP" ]; then
+              echo "No failed/current source zip recorded. Nothing to delete."
+              exit 0
+            fi
+
+            SOURCE_FILES="$FAILED_ZIP
+${FAILED_ZIP}.b64"
+            COMMIT_MESSAGE="Delete failed source zip: $FAILED_ZIP"
+          fi
+
+          if [ -z "$SOURCE_FILES" ]; then
+            echo "No source zip found to delete."
             exit 0
           fi
 
-          CANDIDATES="$FAILED_ZIP ${FAILED_ZIP}.b64"
-          REMOVED=0
-          for file in $CANDIDATES; do
+          echo "$SOURCE_FILES" | while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            file=${file#./}
             if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
               git rm -- "$file"
-              REMOVED=1
             fi
           done
 
-          if [ "$REMOVED" -eq 0 ]; then
-            echo "No tracked failed source zip found for: $FAILED_ZIP"
+          if git diff --cached --quiet; then
+            echo "No tracked source zip found to delete."
             exit 0
           fi
 
-          git commit -m "Delete failed source zip: $FAILED_ZIP"
+          git commit -m "$COMMIT_MESSAGE"
           git push
 
       - name: Keep latest 3 direct app releases
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -308,35 +338,17 @@ jobs:
                 fi
               done
 
-      - name: Delete all source project zips from repo
+      - name: Delete old built-app artifact zips
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          if [ ! -d .git ]; then
-            echo "Repository was loaded by fallback archive, not git checkout. Skip source zip cleanup."
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          SOURCE_FILES=$(find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print)
-
-          if [ -z "$SOURCE_FILES" ]; then
-            echo "No source zip found to delete."
-            exit 0
-          fi
-
-          echo "$SOURCE_FILES" | while read -r file; do
-            file=${file#./}
-            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
-              git rm "$file"
-            fi
-          done
-
-          if git diff --cached --quiet; then
-            echo "No tracked source zip found to delete."
-            exit 0
-          fi
-
-          git commit -m "Delete all source project zips after successful builds"
-          git push
+          set +e
+          gh api repos/${{ github.repository }}/actions/artifacts --paginate \
+            --jq '.artifacts[] | select(.name | startswith("Buzhen-built-apps")) | .id' \
+            | while read -r artifact_id; do
+                if [ -n "$artifact_id" ]; then
+                  echo "Deleting old artifact $artifact_id"
+                  gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$artifact_id
+                fi
+              done
