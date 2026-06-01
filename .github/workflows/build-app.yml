@@ -1,4 +1,4 @@
-name: Build ZIPs to IPA or Mac DMG
+name: Build ZIPs to direct IPA or Mac DMG
 
 on:
   workflow_dispatch:
@@ -217,14 +217,27 @@ jobs:
           echo "========== OUTPUT FILES ==========" | tee -a logs/build-summary.txt
           find output -maxdepth 1 \( -name "*.ipa" -o -name "*.dmg" \) -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
 
-      - name: Upload built artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Buzhen-built-apps-${{ github.run_number }}
-          path: |
-            output/*.ipa
-            output/*.dmg
-          retention-days: 7
+      - name: Upload IPA/DMG as direct release downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          RELEASE_TAG="built-apps-${{ github.run_id }}"
+          RELEASE_TITLE="Built Apps #${{ github.run_number }}"
+          RELEASE_NOTES="Direct downloadable build outputs from GitHub Actions run ${{ github.run_number }}. Download the .ipa file from this release's Assets section."
+
+          mapfile -t BUILT_FILES < <(find "$GITHUB_WORKSPACE/output" -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) | sort)
+          if [ "${#BUILT_FILES[@]}" -eq 0 ]; then
+            echo "No IPA or DMG files generated."
+            exit 1
+          fi
+
+          printf 'Release files:\n'
+          printf '%s\n' "${BUILT_FILES[@]}"
+
+          gh release create "$RELEASE_TAG" "${BUILT_FILES[@]}" \
+            --title "$RELEASE_TITLE" \
+            --notes "$RELEASE_NOTES"
 
       - name: Upload build logs
         if: always()
@@ -278,20 +291,20 @@ jobs:
           git commit -m "Delete failed source zip: $FAILED_ZIP"
           git push
 
-      - name: Keep latest 3 built app artifacts
+      - name: Keep latest 3 direct app releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          gh api repos/${{ github.repository }}/actions/artifacts --paginate \
-            --jq '.artifacts[] | select(.name | startswith("Buzhen-built-apps")) | [.created_at, .id] | @tsv' \
+          gh api repos/${{ github.repository }}/releases --paginate \
+            --jq '.[] | select(.tag_name | startswith("built-apps-")) | [.created_at, .id, .tag_name] | @tsv' \
             | sort -r \
             | tail -n +4 \
-            | cut -f2 \
-            | while read -r artifact_id; do
-                if [ -n "$artifact_id" ]; then
-                  echo "Deleting old artifact $artifact_id"
-                  gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$artifact_id
+            | while IFS=$'\t' read -r created_at release_id tag_name; do
+                if [ -n "$release_id" ]; then
+                  echo "Deleting old app release $release_id / $tag_name"
+                  gh api -X DELETE repos/${{ github.repository }}/releases/$release_id
+                  git push --delete origin "$tag_name" || true
                 fi
               done
 
