@@ -99,20 +99,60 @@ jobs:
 
           PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
           IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
+          rm -rf "$PAYLOAD_DIR" "$IPA_PATH" "$IPA_PATH.sha256"
           mkdir -p "$PAYLOAD_DIR/Payload"
           cp -R "$APP" "$PAYLOAD_DIR/Payload/"
+
           cd "$PAYLOAD_DIR"
-          /usr/bin/zip -qry "$IPA_PATH" Payload
+          /usr/bin/ditto -c -k --keepParent Payload "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-package.log"
+          DITTO_STATUS=${PIPESTATUS[0]}
           cd "$GITHUB_WORKSPACE"
+          if [ "$DITTO_STATUS" -ne 0 ]; then
+            echo "ditto IPA packaging failed with status $DITTO_STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit "$DITTO_STATUS"
+          fi
+
           unzip -tq "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-verify.log"
-          ls -lh "$IPA_PATH" | tee -a logs/build-summary.txt
+          VERIFY_STATUS=${PIPESTATUS[0]}
+          if [ "$VERIFY_STATUS" -ne 0 ]; then
+            echo "IPA verification failed with status $VERIFY_STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit "$VERIFY_STATUS"
+          fi
+
+          python3 - "$IPA_PATH" <<'PY' 2>&1 | tee "$LOG_DIR/ipa-structure-check.log"
+import sys, zipfile
+ipa = sys.argv[1]
+with zipfile.ZipFile(ipa) as z:
+    names = z.namelist()
+    bad = z.testzip()
+    if bad:
+        raise SystemExit(f'Bad zip member: {bad}')
+    apps = [n for n in names if n.startswith('Payload/') and n.endswith('.app/')]
+    if len(apps) != 1:
+        raise SystemExit(f'Expected exactly one Payload/*.app directory, found {len(apps)}')
+    app = apps[0]
+    plist = app + 'Info.plist'
+    if plist not in names:
+        raise SystemExit('Missing Payload/*.app/Info.plist')
+print('IPA structure OK')
+PY
+          STRUCTURE_STATUS=${PIPESTATUS[0]}
+          if [ "$STRUCTURE_STATUS" -ne 0 ]; then
+            echo "IPA structure check failed" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit "$STRUCTURE_STATUS"
+          fi
+
+          shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
+          ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
 
       - name: Upload IPA artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Built-IPA-${{ github.run_number }}-${{ github.run_attempt }}
-          path: output/*.ipa
+          path: |
+            output/*.ipa
+            output/*.ipa.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -132,7 +172,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="built-ipa-${{ github.run_id }}-${{ github.run_attempt }}"
-          gh release create "$TAG" output/*.ipa --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder."
+          gh release create "$TAG" output/*.ipa output/*.ipa.sha256 --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder. The IPA is verified with unzip and a structure check before upload."
 
       - name: Delete source zip after successful build
         if: success()
@@ -164,6 +204,7 @@ jobs:
           echo "## Run IPA Builder" >> "$GITHUB_STEP_SUMMARY"
           echo "Successful run: download Built-IPA artifact or Release asset." >> "$GITHUB_STEP_SUMMARY"
           echo "Failed run: download Build-Diagnostics artifact." >> "$GITHUB_STEP_SUMMARY"
+          echo "The IPA is verified before artifact/release upload." >> "$GITHUB_STEP_SUMMARY"
           echo "After a successful run, the source zip is deleted from the repository root." >> "$GITHUB_STEP_SUMMARY"
           if [ -f logs/build-summary.txt ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
