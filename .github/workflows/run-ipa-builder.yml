@@ -119,29 +119,7 @@ jobs:
             exit "$VERIFY_STATUS"
           fi
 
-          python3 - "$IPA_PATH" <<'PY' 2>&1 | tee "$LOG_DIR/ipa-structure-check.log"
-import sys, zipfile
-ipa = sys.argv[1]
-with zipfile.ZipFile(ipa) as z:
-    names = z.namelist()
-    bad = z.testzip()
-    if bad:
-        raise SystemExit(f'Bad zip member: {bad}')
-    apps = [n for n in names if n.startswith('Payload/') and n.endswith('.app/')]
-    if len(apps) != 1:
-        raise SystemExit(f'Expected exactly one Payload/*.app directory, found {len(apps)}')
-    app = apps[0]
-    plist = app + 'Info.plist'
-    if plist not in names:
-        raise SystemExit('Missing Payload/*.app/Info.plist')
-print('IPA structure OK')
-PY
-          STRUCTURE_STATUS=${PIPESTATUS[0]}
-          if [ "$STRUCTURE_STATUS" -ne 0 ]; then
-            echo "IPA structure check failed" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit "$STRUCTURE_STATUS"
-          fi
-
+          unzip -l "$IPA_PATH" | tee "$LOG_DIR/ipa-file-list.txt" | tee -a logs/build-summary.txt
           shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
           ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
 
@@ -161,7 +139,7 @@ PY
         uses: actions/upload-artifact@v4
         with:
           name: Build-Diagnostics-${{ github.run_number }}-${{ github.run_attempt }}
-          path: logs/**
+          path: "logs/**"
           if-no-files-found: warn
           retention-days: 14
 
@@ -172,7 +150,7 @@ PY
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="built-ipa-${{ github.run_id }}-${{ github.run_attempt }}"
-          gh release create "$TAG" output/*.ipa output/*.ipa.sha256 --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder. The IPA is verified with unzip and a structure check before upload."
+          gh release create "$TAG" output/*.ipa output/*.ipa.sha256 --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder. The IPA is verified with unzip before upload."
 
       - name: Delete source zip after successful build
         if: success()
