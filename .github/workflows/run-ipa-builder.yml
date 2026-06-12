@@ -134,6 +134,29 @@ jobs:
           TAG="built-ipa-${{ github.run_id }}-${{ github.run_attempt }}"
           gh release create "$TAG" output/*.ipa --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder."
 
+      - name: Delete source zip after successful build
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          FOUND=0
+          while IFS= read -r ZIP_FILE; do
+            [ -n "$ZIP_FILE" ] || continue
+            ZIP_FILE="${ZIP_FILE#./}"
+            if git ls-files --error-unmatch "$ZIP_FILE" >/dev/null 2>&1; then
+              git rm -- "$ZIP_FILE"
+              FOUND=1
+            fi
+          done < <(find . -maxdepth 1 -type f -name "*.zip" -print | sort)
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No tracked source zip found to delete."
+            exit 0
+          fi
+          git commit -m "Delete source zip after successful IPA build"
+          git push
+
       - name: Add summary
         if: always()
         shell: bash
@@ -141,6 +164,7 @@ jobs:
           echo "## Run IPA Builder" >> "$GITHUB_STEP_SUMMARY"
           echo "Successful run: download Built-IPA artifact or Release asset." >> "$GITHUB_STEP_SUMMARY"
           echo "Failed run: download Build-Diagnostics artifact." >> "$GITHUB_STEP_SUMMARY"
+          echo "After a successful run, the source zip is deleted from the repository root." >> "$GITHUB_STEP_SUMMARY"
           if [ -f logs/build-summary.txt ]; then
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             tail -n 160 logs/build-summary.txt >> "$GITHUB_STEP_SUMMARY"
