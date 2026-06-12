@@ -40,7 +40,7 @@ jobs:
         if: steps.checkout.outcome == 'failure'
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
           echo "actions/checkout failed. Falling back to repository archive."
           rm -rf fallback-repo fallback.zip
           curl -L --retry 3 --fail \
@@ -56,7 +56,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
 
           mkdir -p logs output work build diagnostics
           : > logs/current-zip.txt
@@ -71,8 +71,6 @@ jobs:
             echo "$message" > "$GITHUB_WORKSPACE/logs/failure-marker.txt"
             return 1
           }
-
-          trap 'status=$?; line=$LINENO; echo "::error::Build step failed at line ${line} with exit code ${status}"; echo "line=${line} exit=${status}" >> "$GITHUB_WORKSPACE/logs/failure-marker.txt"; exit ${status}' ERR
 
           echo "========== RUN INFO ==========" | tee -a logs/build-summary.txt
           echo "Repository: ${{ github.repository }}" | tee -a logs/build-summary.txt
@@ -152,6 +150,58 @@ jobs:
             find "$PROJECT_DIR" \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | sort | tee "$ZIP_LOG_DIR/project-files.txt"
             find "$PROJECT_DIR" -maxdepth 7 -type f | sort > "$ZIP_LOG_DIR/project-file-list.txt"
 
+            echo "========== APPLY SOURCE PATCHES ==========" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            export PROJECT_DIR
+            python3 - <<'PY' 2>&1 | tee "$ZIP_LOG_DIR/source-patch.log"
+import os
+from pathlib import Path
+
+root = Path(os.environ["PROJECT_DIR"])
+patch_count = 0
+
+for path in root.rglob("ContentView.swift"):
+    text = path.read_text()
+    old = '''.toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { store.newProject() } label: { Image(systemName: "plus") }
+                    Button { store.loadSample() } label: { Image(systemName: "wand.and.stars") }
+                }
+            }'''
+    new = '''.toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        store.newProject()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        store.loadSample()
+                    } label: {
+                        Image(systemName: "wand.and.stars")
+                    }
+                }
+            }'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patch_count += 1
+        print(f"Patched toolbar ambiguity: {path}")
+
+for path in root.rglob("PageWorkspaceView.swift"):
+    text = path.read_text()
+    old = '''.background(isSelected ? .blue.opacity(0.18) : .background.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? .blue.opacity(0.4) : .secondary.opacity(0.12)))'''
+    new = '''.background(isSelected ? Color.blue.opacity(0.18) : Color(.secondarySystemBackground).opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? Color.blue.opacity(0.4) : Color.secondary.opacity(0.12)))'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patch_count += 1
+        print(f"Patched background Color mismatch: {path}")
+
+print(f"Source patch count: {patch_count}")
+PY
+
             cd "$PROJECT_DIR"
             WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1 || true)
             PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1 || true)
@@ -227,13 +277,6 @@ jobs:
 
               DMG_ROOT="$GITHUB_WORKSPACE/output/dmg-root-$SAFE_NAME"
               DMG_PATH="$GITHUB_WORKSPACE/output/${SAFE_NAME}.dmg"
-
-              xattr -cr "$MAC_APP" || true
-              chmod -R u+rwX,go+rX "$MAC_APP" || true
-              find "$MAC_APP" -type f -perm -111 -print -exec chmod +x {} \; || true
-              codesign --force --deep --sign - --timestamp=none "$MAC_APP" 2>&1 | tee "$ZIP_LOG_DIR/codesign.log" || true
-              codesign --verify --deep --strict --verbose=2 "$MAC_APP" 2>&1 | tee "$ZIP_LOG_DIR/codesign-verify.log" || true
-
               mkdir -p "$DMG_ROOT"
               cp -R "$MAC_APP" "$DMG_ROOT/"
               ln -s /Applications "$DMG_ROOT/Applications"
@@ -279,7 +322,6 @@ jobs:
 
               PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$SAFE_NAME"
               IPA_PATH="$GITHUB_WORKSPACE/output/${SAFE_NAME}-unsigned.ipa"
-
               mkdir -p "$PAYLOAD_DIR/Payload"
               cp -R "$APP" "$PAYLOAD_DIR/Payload/"
               cd "$PAYLOAD_DIR"
@@ -295,7 +337,6 @@ jobs:
           done
 
           echo "yes" > logs/build-completed.txt
-
           echo "========== OUTPUT FILES ==========" | tee -a logs/build-summary.txt
           find output -maxdepth 1 \( -name "*.ipa" -o -name "*.dmg" \) -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
           find "$GITHUB_WORKSPACE/output" -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) | sort > logs/built-output-files.txt
@@ -317,27 +358,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
           RELEASE_TAG="built-apps-${{ github.run_id }}-${{ github.run_attempt }}"
           RELEASE_TITLE="Built Apps #${{ github.run_number }}"
           RELEASE_NOTES="Direct downloadable build outputs from GitHub Actions run ${{ github.run_number }}. Download the .ipa/.dmg from this release's Assets section. A workflow artifact is also uploaded on the run page."
           BUILT_LIST="$GITHUB_WORKSPACE/logs/built-output-files.txt"
-
           find "$GITHUB_WORKSPACE/output" -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) | sort > "$BUILT_LIST"
           if [ ! -s "$BUILT_LIST" ]; then
             echo "No IPA or DMG files generated."
             exit 1
           fi
-
-          echo "Release files:"
-          cat "$BUILT_LIST"
-
           gh release delete "$RELEASE_TAG" -y --cleanup-tag || true
-          gh release create "$RELEASE_TAG" \
-            --target "${{ github.sha }}" \
-            --title "$RELEASE_TITLE" \
-            --notes "$RELEASE_NOTES"
-
+          gh release create "$RELEASE_TAG" --target "${{ github.sha }}" --title "$RELEASE_TITLE" --notes "$RELEASE_NOTES"
           while IFS= read -r file; do
             [ -n "$file" ] || continue
             gh release upload "$RELEASE_TAG" "$file" --clobber
@@ -353,7 +385,6 @@ jobs:
           cp -R logs diagnostics/logs 2>/dev/null || true
           mkdir -p diagnostics/output
           find output -maxdepth 1 -type f \( -name "*.ipa" -o -name "*.dmg" \) -exec cp {} diagnostics/output/ \; 2>/dev/null || true
-
           CURRENT_ZIP=""
           FAILED_ZIP=""
           [ -f logs/current-zip.txt ] && CURRENT_ZIP=$(head -n 1 logs/current-zip.txt | tr -d '\r')
@@ -365,7 +396,6 @@ jobs:
             [ -f "$file" ] && cp "$file" diagnostics/source-zips/ || true
             [ -f "${file}.b64" ] && cp "${file}.b64" diagnostics/source-zips/ || true
           done
-
           {
             echo "# Build Diagnostics"
             echo
@@ -376,16 +406,11 @@ jobs:
             echo "- Commit: ${{ github.sha }}"
             echo
             echo "## Failure marker"
-            if [ -f logs/failure-marker.txt ]; then
-              cat logs/failure-marker.txt
-            else
-              echo "No failure marker file."
-            fi
+            if [ -f logs/failure-marker.txt ]; then cat logs/failure-marker.txt; else echo "No failure marker file."; fi
             echo
             echo "## Error files"
             find diagnostics/logs -name "xcodebuild-errors.txt" -print | sort
           } > diagnostics/README.md
-
           tar -czf diagnostics.tar.gz diagnostics
           ls -lh diagnostics.tar.gz
 
@@ -412,54 +437,32 @@ jobs:
             echo "- If failed: download **Build-Diagnostics-${{ github.run_number }}-${{ github.run_attempt }}** from Artifacts and check diagnostics/logs."
             echo
             echo "### Summary log"
-            if [ -f logs/build-summary.txt ]; then
-              sed -e 's/^/    /' logs/build-summary.txt
-            else
-              echo "No build summary file generated."
-            fi
+            if [ -f logs/build-summary.txt ]; then sed -e 's/^/    /' logs/build-summary.txt; else echo "No build summary file generated."; fi
             echo
             echo "### Failure marker"
-            if [ -s logs/failure-marker.txt ]; then
-              sed -e 's/^/    /' logs/failure-marker.txt
-            else
-              echo "No failure marker."
-            fi
+            if [ -s logs/failure-marker.txt ]; then sed -e 's/^/    /' logs/failure-marker.txt; else echo "No failure marker."; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Delete source project zips after successful build only
         if: steps.build.outcome == 'success' && inputs.delete_source_zips_on_success == true
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -euo pipefail
           if [ ! -d .git ]; then
             echo "Repository was loaded by fallback archive, not git checkout. Skip source zip cleanup."
             exit 0
           fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           DELETE_LIST=$(mktemp)
           find . -maxdepth 1 -type f \( -name "*.zip" -o -name "*.zip.b64" \) -print > "$DELETE_LIST"
-
-          if [ ! -s "$DELETE_LIST" ]; then
-            echo "No source zip found to delete."
-            exit 0
-          fi
-
+          if [ ! -s "$DELETE_LIST" ]; then echo "No source zip found to delete."; exit 0; fi
           while IFS= read -r file; do
             [ -n "$file" ] || continue
             file=${file#./}
-            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
-              git rm -- "$file"
-            fi
+            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then git rm -- "$file"; fi
           done < "$DELETE_LIST"
-
-          if git diff --cached --quiet; then
-            echo "No tracked source zip found to delete."
-            exit 0
-          fi
-
+          if git diff --cached --quiet; then echo "No tracked source zip found to delete."; exit 0; fi
           git commit -m "Delete source project zips after successful build"
           git push
 
@@ -472,30 +475,11 @@ jobs:
           set +e
           gh api repos/${{ github.repository }}/releases --paginate \
             --jq '.[] | select(.tag_name | startswith("built-apps-")) | [.created_at, .id, .tag_name] | @tsv' \
-            | sort -r \
-            | tail -n +4 \
+            | sort -r | tail -n +4 \
             | while IFS=$'\t' read -r created_at release_id tag_name; do
                 if [ -n "$release_id" ]; then
-                  echo "Deleting old app release $release_id / $tag_name"
                   gh api -X DELETE repos/${{ github.repository }}/releases/$release_id
                   git push --delete origin "$tag_name" || true
-                fi
-              done
-
-      - name: Delete old build artifacts
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          gh api repos/${{ github.repository }}/actions/artifacts --paginate \
-            --jq '.artifacts[] | select(.name | startswith("Built-Apps-") or startswith("Build-Diagnostics-") or startswith("Buzhen-built-apps")) | .id' \
-            | tail -n +9 \
-            | while read -r artifact_id; do
-                if [ -n "$artifact_id" ]; then
-                  echo "Deleting old artifact $artifact_id"
-                  gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$artifact_id
                 fi
               done
 
