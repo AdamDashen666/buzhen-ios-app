@@ -1,0 +1,246 @@
+name: Manual Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.zip'
+      - '*.zip.b64'
+      - '.github/workflows/manual-build-ipa.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build every Xcode ZIP to IPA
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          mkdir -p logs output work build
+          : > logs/build-summary.txt
+          : > logs/failure-marker.txt
+
+          echo "Manual Build IPA" | tee -a logs/build-summary.txt
+          echo "Repository: ${{ github.repository }}" | tee -a logs/build-summary.txt
+          echo "Run: ${{ github.run_number }} attempt ${{ github.run_attempt }}" | tee -a logs/build-summary.txt
+          echo "Commit: ${{ github.sha }}" | tee -a logs/build-summary.txt
+          sw_vers | tee logs/macos-version.txt | tee -a logs/build-summary.txt
+          xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcode-select -p | tee logs/xcode-select.txt | tee -a logs/build-summary.txt
+
+          echo "Decoding .zip.b64 files if present" | tee -a logs/build-summary.txt
+          for B64 in *.zip.b64; do
+            [ -f "$B64" ] || continue
+            ZIP="${B64%.b64}"
+            echo "Decoding $B64 -> $ZIP" | tee -a logs/build-summary.txt
+            base64 --decode "$B64" > "$ZIP" 2>/dev/null || base64 -D -i "$B64" -o "$ZIP"
+          done
+
+          ZIP_FILES=()
+          while IFS= read -r ZIP_FILE; do
+            [ -n "$ZIP_FILE" ] && ZIP_FILES+=("$ZIP_FILE")
+          done < <(find . -maxdepth 1 -type f -name "*.zip" -print | sort)
+
+          echo "Found ZIP count: ${#ZIP_FILES[@]}" | tee -a logs/build-summary.txt
+          printf '%s\n' "${ZIP_FILES[@]}" | tee logs/input-zips.txt | tee -a logs/build-summary.txt
+
+          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
+            echo "No .zip or .zip.b64 found in repository root." | tee logs/failure-marker.txt | tee -a logs/build-summary.txt
+            exit 1
+          fi
+
+          BUILD_FAILED=0
+          INDEX=0
+          for ZIP in "${ZIP_FILES[@]}"; do
+            INDEX=$((INDEX + 1))
+            NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
+            [ -n "$NAME" ] || NAME="Project-$INDEX"
+            PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
+            BUILD_DIR="$GITHUB_WORKSPACE/build/$NAME"
+            LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
+            mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR"
+            echo "========== BUILDING $ZIP ==========" | tee -a logs/build-summary.txt
+
+            unzip -t "$ZIP" > "$LOG_DIR/unzip-test.txt" 2>&1
+            if [ $? -ne 0 ]; then
+              echo "ZIP failed unzip test: $ZIP" | tee -a logs/build-summary.txt logs/failure-marker.txt
+              BUILD_FAILED=1
+              continue
+            fi
+            unzip -q "$ZIP" -d "$PROJECT_DIR"
+
+            echo "Applying compatibility source patches" | tee -a logs/build-summary.txt
+            export PROJECT_DIR
+            python3 - <<'PY' 2>&1 | tee "$LOG_DIR/source-patch.log"
+import os
+from pathlib import Path
+root = Path(os.environ['PROJECT_DIR'])
+patch_count = 0
+
+for path in root.rglob('ContentView.swift'):
+    text = path.read_text()
+    old = '''.toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { store.newProject() } label: { Image(systemName: "plus") }
+                    Button { store.loadSample() } label: { Image(systemName: "wand.and.stars") }
+                }
+            }'''
+    new = '''.toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { store.newProject() } label: { Image(systemName: "plus") }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { store.loadSample() } label: { Image(systemName: "wand.and.stars") }
+                }
+            }'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patch_count += 1
+        print('Patched toolbar:', path)
+
+for path in root.rglob('PageWorkspaceView.swift'):
+    text = path.read_text()
+    old = '''.background(isSelected ? .blue.opacity(0.18) : .background.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? .blue.opacity(0.4) : .secondary.opacity(0.12)))'''
+    new = '''.background(isSelected ? Color.blue.opacity(0.18) : Color(.secondarySystemBackground).opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? Color.blue.opacity(0.4) : Color.secondary.opacity(0.12)))'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patch_count += 1
+        print('Patched background:', path)
+
+print('Source patch count:', patch_count)
+PY
+
+            find "$PROJECT_DIR" \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | sort | tee "$LOG_DIR/project-files.txt"
+            find "$PROJECT_DIR" -maxdepth 7 -type f | sort > "$LOG_DIR/project-file-list.txt"
+
+            cd "$PROJECT_DIR"
+            WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1)
+            PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
+            if [ -n "$WORKSPACE" ]; then
+              TYPE="-workspace"
+              FILE="$WORKSPACE"
+            else
+              TYPE="-project"
+              FILE="$PROJECT"
+            fi
+
+            if [ -z "$FILE" ]; then
+              echo "No Xcode project found in $ZIP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" "$GITHUB_WORKSPACE/logs/failure-marker.txt"
+              BUILD_FAILED=1
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$LOG_DIR/xcodebuild-list.txt"
+            SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
+            echo "Using file: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt"
+            echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            if [ -z "$SCHEME" ]; then
+              echo "No shared scheme found for $ZIP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" "$GITHUB_WORKSPACE/logs/failure-marker.txt"
+              BUILD_FAILED=1
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            set +e
+            xcodebuild clean build \
+              $TYPE "$FILE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              BUILD_DIR="$BUILD_DIR" \
+              2>&1 | tee "$LOG_DIR/xcodebuild.log"
+            STATUS=${PIPESTATUS[0]}
+            set -e
+
+            grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift|Provisioning|Signing|CodeSign|Ld |Command .* failed" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
+            tail -n 200 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-200-lines.txt" || true
+
+            if [ "$STATUS" -ne 0 ]; then
+              echo "xcodebuild failed for $ZIP with status $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" "$GITHUB_WORKSPACE/logs/failure-marker.txt"
+              cat "$LOG_DIR/xcodebuild-errors.txt" | tail -n 80 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
+              BUILD_FAILED=1
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+            if [ -z "$APP" ]; then
+              echo "Build succeeded but no .app found for $ZIP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" "$GITHUB_WORKSPACE/logs/failure-marker.txt"
+              BUILD_FAILED=1
+              cd "$GITHUB_WORKSPACE"
+              continue
+            fi
+
+            PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
+            IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
+            mkdir -p "$PAYLOAD_DIR/Payload"
+            cp -R "$APP" "$PAYLOAD_DIR/Payload/"
+            cd "$PAYLOAD_DIR"
+            /usr/bin/zip -qry "$IPA_PATH" Payload
+            cd "$GITHUB_WORKSPACE"
+            rm -rf "$PAYLOAD_DIR"
+            unzip -tq "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-verify.log"
+            ls -lh "$IPA_PATH" | tee -a logs/build-summary.txt
+          done
+
+          find output -maxdepth 1 -type f -name "*.ipa" -print -exec ls -lh {} \; | tee -a logs/build-summary.txt
+          [ "$BUILD_FAILED" -eq 0 ]
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Built-IPA-${{ github.run_number }}-${{ github.run_attempt }}
+          path: output/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Diagnostics-${{ github.run_number }}-${{ github.run_attempt }}
+          path: logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Add summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Manual Build IPA" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Build outcome: ${{ steps.build.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Download artifacts: Built-IPA and Build-Diagnostics." >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          if [ -f logs/build-summary.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 220 logs/build-summary.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail after uploading diagnostics
+        if: steps.build.outcome != 'success'
+        shell: bash
+        run: exit 1
