@@ -5,18 +5,135 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
     name: Build IPA
     runs-on: macos-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Confirm manual workflow works
+      - name: Build first Xcode zip to unsigned IPA
         shell: bash
         run: |
-          echo "Run IPA Builder button works."
-          echo "Next step is adding the IPA build script back safely."
+          set +e
+          mkdir -p logs output work build
+          echo "Run IPA Builder" | tee logs/build-summary.txt
+          xcodebuild -version 2>&1 | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcode-select -p 2>&1 | tee logs/xcode-select.txt | tee -a logs/build-summary.txt
+
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort | head -n 1)
+          echo "Using zip: $ZIP" | tee -a logs/build-summary.txt
+          if [ -z "$ZIP" ]; then
+            echo "No zip found in repo root" | tee logs/failure-marker.txt | tee -a logs/build-summary.txt
+            exit 1
+          fi
+
+          NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
+          PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
+          BUILD_DIR="$GITHUB_WORKSPACE/build/$NAME"
+          LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
+          mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR"
+
+          unzip -q "$ZIP" -d "$PROJECT_DIR"
+          find "$PROJECT_DIR" -name "*.xcodeproj" -o -name "*.xcworkspace" | sort | tee "$LOG_DIR/project-files.txt"
+          find "$PROJECT_DIR" -maxdepth 7 -type f | sort > "$LOG_DIR/project-file-list.txt"
+
+          cd "$PROJECT_DIR"
+          WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1)
+          PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
+          if [ -n "$WORKSPACE" ]; then
+            TYPE="-workspace"
+            FILE="$WORKSPACE"
+          else
+            TYPE="-project"
+            FILE="$PROJECT"
+          fi
+
+          echo "Using file: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt"
+          if [ -z "$FILE" ]; then
+            echo "No Xcode project found" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit 1
+          fi
+
+          xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$LOG_DIR/xcodebuild-list.txt"
+          SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
+          echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          if [ -z "$SCHEME" ]; then
+            echo "No shared scheme found" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit 1
+          fi
+
+          set +e
+          xcodebuild clean build \
+            $TYPE "$FILE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            BUILD_DIR="$BUILD_DIR" \
+            2>&1 | tee "$LOG_DIR/xcodebuild.log"
+          STATUS=${PIPESTATUS[0]}
+
+          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift|Provisioning|Signing|CodeSign|Ld |Command .* failed" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
+          tail -n 200 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-200-lines.txt" || true
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "xcodebuild failed with status $STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            cat "$LOG_DIR/xcodebuild-errors.txt" | tail -n 80 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
+            exit "$STATUS"
+          fi
+
+          APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+          echo "App: $APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          if [ -z "$APP" ]; then
+            echo "No app generated" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit 1
+          fi
+
+          PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
+          IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
+          mkdir -p "$PAYLOAD_DIR/Payload"
+          cp -R "$APP" "$PAYLOAD_DIR/Payload/"
+          cd "$PAYLOAD_DIR"
+          /usr/bin/zip -qry "$IPA_PATH" Payload
+          cd "$GITHUB_WORKSPACE"
+          unzip -tq "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-verify.log"
+          ls -lh "$IPA_PATH" | tee -a logs/build-summary.txt
+
+      - name: Upload IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Built-IPA-${{ github.run_number }}-${{ github.run_attempt }}
+          path: output/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Diagnostics-${{ github.run_number }}-${{ github.run_attempt }}
+          path: logs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Add summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## Run IPA Builder" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download Built-IPA or Build-Diagnostics below." >> "$GITHUB_STEP_SUMMARY"
+          if [ -f logs/build-summary.txt ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 160 logs/build-summary.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
