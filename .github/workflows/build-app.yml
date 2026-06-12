@@ -4,16 +4,13 @@ name: Build Xcode ZIPs to IPA with diagnostics
   workflow_dispatch:
     inputs:
       runner_label:
-        description: 'macOS runner label. Use macos-latest for stable, macos-26 for newest image.'
+        description: 'macOS runner label. macos-latest is recommended for stable builds.'
         required: true
         type: choice
         default: macos-latest
         options:
           - macos-latest
           - macos-15
-          - macos-26
-          - macos-15-intel
-          - macos-26-intel
       delete_source_zips_on_success:
         description: 'Delete uploaded source ZIP files only after a successful build.'
         required: true
@@ -91,7 +88,7 @@ jobs:
           df -h 2>&1 | tee logs/disk-space.txt | tee -a logs/build-summary.txt || true
           echo | tee -a logs/build-summary.txt
 
-          B64_FILES=$(find . -maxdepth 1 -type f -name "*.zip.b64" -print | sort -V || true)
+          B64_FILES=$(find . -maxdepth 1 -type f -name "*.zip.b64" -print | sort || true)
           if [ -n "$B64_FILES" ]; then
             echo "========== DECODING BASE64 ZIPS ==========" | tee -a logs/build-summary.txt
             echo "$B64_FILES" | tee logs/base64-zips.txt
@@ -108,7 +105,10 @@ jobs:
             done <<< "$B64_FILES"
           fi
 
-          mapfile -t ZIP_FILES < <(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V)
+          ZIP_FILES=()
+          while IFS= read -r ZIP_FILE; do
+            [ -n "$ZIP_FILE" ] && ZIP_FILES+=("$ZIP_FILE")
+          done < <(find . -maxdepth 1 -type f -name "*.zip" -print | sort)
           ZIP_COUNT="${#ZIP_FILES[@]}"
 
           echo "========== INPUT ZIPS ==========" | tee -a logs/build-summary.txt
