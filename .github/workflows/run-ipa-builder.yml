@@ -43,6 +43,45 @@ jobs:
           find "$PROJECT_DIR" -name "*.xcodeproj" -o -name "*.xcworkspace" | sort | tee "$LOG_DIR/project-files.txt"
           find "$PROJECT_DIR" -maxdepth 7 -type f | sort > "$LOG_DIR/project-file-list.txt"
 
+          echo "Patching known SwiftUI compile issues" | tee "$LOG_DIR/source-patch.log" | tee -a logs/build-summary.txt
+          python3 - "$PROJECT_DIR" <<'PY' 2>&1 | tee -a "$LOG_DIR/source-patch.log"
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+patches = 0
+for path in root.rglob('ContentView.swift'):
+    text = path.read_text()
+    old = '''.toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { store.newProject() } label: { Image(systemName: "plus") }
+                    Button { store.loadSample() } label: { Image(systemName: "wand.and.stars") }
+                }
+            }'''
+    new = '''.toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { store.newProject() } label: { Image(systemName: "plus") }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { store.loadSample() } label: { Image(systemName: "wand.and.stars") }
+                }
+            }'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patches += 1
+        print('patched toolbar', path)
+for path in root.rglob('PageWorkspaceView.swift'):
+    text = path.read_text()
+    old = '''.background(isSelected ? .blue.opacity(0.18) : .background.opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? .blue.opacity(0.4) : .secondary.opacity(0.12)))'''
+    new = '''.background(isSelected ? Color.blue.opacity(0.18) : Color(.secondarySystemBackground).opacity(0.55), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(isSelected ? Color.blue.opacity(0.4) : Color.secondary.opacity(0.12)))'''
+    if old in text:
+        path.write_text(text.replace(old, new))
+        patches += 1
+        print('patched background', path)
+print('patches:', patches)
+PY
+
           cd "$PROJECT_DIR"
           WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1)
           PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
