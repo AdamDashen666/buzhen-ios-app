@@ -4,124 +4,74 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build IPA
     runs-on: macos-latest
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Select newest available Xcode
+        shell: bash
+        run: |
+          set -e
+          find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V || true
+          PICK=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V | tail -n 1)
+          if [ -n "$PICK" ] && [ -d "$PICK/Contents/Developer" ]; then
+            sudo xcode-select -s "$PICK/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Build unsigned IPA
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
           mkdir -p logs output work build
           echo "Run IPA Builder" | tee logs/build-summary.txt
-          xcodebuild -version 2>&1 | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
-          xcode-select -p 2>&1 | tee logs/xcode-select.txt | tee -a logs/build-summary.txt
-
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort | head -n 1)
-          echo "Using zip: $ZIP" | tee -a logs/build-summary.txt
-          if [ -z "$ZIP" ]; then
-            echo "No zip found in repo root" | tee logs/failure-marker.txt | tee -a logs/build-summary.txt
-            exit 1
-          fi
-
+          xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcrun --sdk iphoneos --show-sdk-version | tee logs/iphoneos-sdk-version.txt | tee -a logs/build-summary.txt
+          echo "Available zips:" | tee -a logs/build-summary.txt
+          find . -maxdepth 1 -type f -name "*.zip" | sort -V | tee -a logs/build-summary.txt
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort -V | tail -n 1)
+          echo "Using newest zip: $ZIP" | tee -a logs/build-summary.txt
+          test -n "$ZIP"
           NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
           PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
           BUILD_DIR="$GITHUB_WORKSPACE/build/$NAME"
           LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
           mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR"
-
           unzip -q "$ZIP" -d "$PROJECT_DIR"
-          find "$PROJECT_DIR" \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) | sort | tee "$LOG_DIR/project-files.txt"
-          find "$PROJECT_DIR" -maxdepth 7 -type f | sort > "$LOG_DIR/project-file-list.txt"
-
           cd "$PROJECT_DIR"
-          WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1)
           PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
-
-          if [ -n "$WORKSPACE" ]; then
-            TYPE="-workspace"
-            FILE="$WORKSPACE"
-          else
-            TYPE="-project"
-            FILE="$PROJECT"
-          fi
-
-          echo "Using file: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt"
-          if [ -z "$FILE" ]; then
-            echo "No Xcode project found" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit 1
-          fi
-
-          xcodebuild -list $TYPE "$FILE" 2>&1 | tee "$LOG_DIR/xcodebuild-list.txt"
+          test -n "$PROJECT"
+          xcodebuild -list -project "$PROJECT" | tee "$LOG_DIR/xcodebuild-list.txt"
           SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
-          echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          if [ -z "$SCHEME" ]; then
-            echo "No shared scheme found" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit 1
-          fi
-
-          xcodebuild clean build \
-            $TYPE "$FILE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            BUILD_DIR="$BUILD_DIR" \
-            2>&1 | tee "$LOG_DIR/xcodebuild.log"
+          test -n "$SCHEME"
+          set +e
+          xcodebuild clean build -project "$PROJECT" -scheme "$SCHEME" -configuration Release -sdk iphoneos -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" BUILD_DIR="$BUILD_DIR" 2>&1 | tee "$LOG_DIR/xcodebuild.log"
           STATUS=${PIPESTATUS[0]}
-
-          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift|Provisioning|Signing|CodeSign|Ld |Command .* failed" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
+          set -e
+          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
           tail -n 200 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-200-lines.txt" || true
-
           if [ "$STATUS" -ne 0 ]; then
-            echo "xcodebuild failed with status $STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
             cat "$LOG_DIR/xcodebuild-errors.txt" | tail -n 80 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
             exit "$STATUS"
           fi
-
           APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
-          echo "App: $APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-          if [ -z "$APP" ]; then
-            echo "No app generated" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit 1
-          fi
-
+          test -n "$APP"
           PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
           IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
-          rm -rf "$PAYLOAD_DIR" "$IPA_PATH" "$IPA_PATH.sha256"
           mkdir -p "$PAYLOAD_DIR/Payload"
           cp -R "$APP" "$PAYLOAD_DIR/Payload/"
-
           cd "$PAYLOAD_DIR"
-          /usr/bin/ditto -c -k --keepParent Payload "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-package.log"
-          DITTO_STATUS=${PIPESTATUS[0]}
+          /usr/bin/ditto -c -k --keepParent Payload "$IPA_PATH"
           cd "$GITHUB_WORKSPACE"
-          if [ "$DITTO_STATUS" -ne 0 ]; then
-            echo "ditto IPA packaging failed with status $DITTO_STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit "$DITTO_STATUS"
-          fi
-
-          unzip -tq "$IPA_PATH" 2>&1 | tee "$LOG_DIR/ipa-verify.log"
-          VERIFY_STATUS=${PIPESTATUS[0]}
-          if [ "$VERIFY_STATUS" -ne 0 ]; then
-            echo "IPA verification failed with status $VERIFY_STATUS" | tee "$GITHUB_WORKSPACE/logs/failure-marker.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
-            exit "$VERIFY_STATUS"
-          fi
-
-          unzip -l "$IPA_PATH" | tee "$LOG_DIR/ipa-file-list.txt" | tee -a logs/build-summary.txt
+          unzip -tq "$IPA_PATH"
           shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
-          ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
 
       - name: Upload IPA artifact
         if: success()
@@ -142,50 +92,3 @@ jobs:
           path: "logs/**"
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Create release with IPA
-        if: success()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="built-ipa-${{ github.run_id }}-${{ github.run_attempt }}"
-          gh release create "$TAG" output/*.ipa output/*.ipa.sha256 --title "Built IPA #${{ github.run_number }}" --notes "Unsigned IPA built by Run IPA Builder. The IPA is verified with unzip before upload."
-
-      - name: Delete source zip after successful build
-        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          FOUND=0
-          while IFS= read -r ZIP_FILE; do
-            [ -n "$ZIP_FILE" ] || continue
-            ZIP_FILE="${ZIP_FILE#./}"
-            if git ls-files --error-unmatch "$ZIP_FILE" >/dev/null 2>&1; then
-              git rm -- "$ZIP_FILE"
-              FOUND=1
-            fi
-          done < <(find . -maxdepth 1 -type f -name "*.zip" -print | sort)
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No tracked source zip found to delete."
-            exit 0
-          fi
-          git commit -m "Delete source zip after successful IPA build"
-          git push
-
-      - name: Add summary
-        if: always()
-        shell: bash
-        run: |
-          echo "## Run IPA Builder" >> "$GITHUB_STEP_SUMMARY"
-          echo "Successful run: download Built-IPA artifact or Release asset." >> "$GITHUB_STEP_SUMMARY"
-          echo "Failed run: download Build-Diagnostics artifact." >> "$GITHUB_STEP_SUMMARY"
-          echo "The IPA is verified before artifact/release upload." >> "$GITHUB_STEP_SUMMARY"
-          echo "After a successful run, the source zip is deleted from the repository root." >> "$GITHUB_STEP_SUMMARY"
-          if [ -f logs/build-summary.txt ]; then
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -n 160 logs/build-summary.txt >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
