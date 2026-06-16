@@ -1,0 +1,117 @@
+name: Run IPA Builder Newest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build newest source zip
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest available Xcode
+        shell: bash
+        run: |
+          set -e
+          echo "Available Xcodes:"
+          find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V || true
+          PICK=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V | tail -n 1)
+          if [ -n "$PICK" ] && [ -d "$PICK/Contents/Developer" ]; then
+            sudo xcode-select -s "$PICK/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs output work build
+          echo "Run IPA Builder Newest" | tee logs/build-summary.txt
+          xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcrun --sdk iphoneos --show-sdk-version | tee logs/iphoneos-sdk-version.txt | tee -a logs/build-summary.txt
+
+          echo "Available source zips:" | tee -a logs/build-summary.txt
+          find . -maxdepth 1 -type f -name "*.zip" | sort -V | tee -a logs/build-summary.txt
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort -V | tail -n 1)
+          echo "Using newest zip: $ZIP" | tee -a logs/build-summary.txt
+          test -n "$ZIP"
+
+          NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
+          PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
+          BUILD_DIR="$GITHUB_WORKSPACE/build/$NAME"
+          LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
+          mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR"
+
+          unzip -q "$ZIP" -d "$PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          FILE=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
+          echo "Using project: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt"
+          test -n "$FILE"
+
+          xcodebuild -list -project "$FILE" | tee "$LOG_DIR/xcodebuild-list.txt"
+          SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
+          echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          test -n "$SCHEME"
+
+          set +e
+          xcodebuild clean build \
+            -project "$FILE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            BUILD_DIR="$BUILD_DIR" \
+            2>&1 | tee "$LOG_DIR/xcodebuild.log"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
+          tail -n 200 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-200-lines.txt" || true
+          if [ "$STATUS" -ne 0 ]; then
+            cat "$LOG_DIR/xcodebuild-errors.txt" | tail -n 80 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
+            exit "$STATUS"
+          fi
+
+          APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+          test -n "$APP"
+          PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
+          IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
+          mkdir -p "$PAYLOAD_DIR/Payload"
+          cp -R "$APP" "$PAYLOAD_DIR/Payload/"
+          cd "$PAYLOAD_DIR"
+          /usr/bin/ditto -c -k --keepParent Payload "$IPA_PATH"
+          cd "$GITHUB_WORKSPACE"
+          unzip -tq "$IPA_PATH"
+          shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
+          ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
+
+      - name: Upload IPA artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Built-IPA-Newest-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            output/*.ipa
+            output/*.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Diagnostics-Newest-${{ github.run_number }}-${{ github.run_attempt }}
+          path: "logs/**"
+          if-no-files-found: warn
+          retention-days: 14
