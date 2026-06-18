@@ -1,0 +1,200 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_zip:
+        description: "Optional source zip name at repo root, e.g. LiquidAIBrowser_v1_3_1.zip. Empty = newest zip."
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-macos-dmg.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-macos-dmg.yml"
+
+jobs:
+  build-macos-dmg:
+    name: Build macOS DMG from newest source zip
+    runs-on: macos-15-arm64
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest available Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Available Xcodes:"
+          find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V || true
+          PICK=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V | tail -n 1)
+          if [ -n "$PICK" ] && [ -d "$PICK/Contents/Developer" ]; then
+            sudo xcode-select -s "$PICK/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Build unsigned Mac Catalyst app and package DMG
+        shell: bash
+        env:
+          SOURCE_ZIP_INPUT: ${{ github.event.inputs.source_zip || '' }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p logs output work build dmg-root
+          echo "Run macOS DMG Builder" | tee logs/build-summary.txt
+          xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
+          xcrun --sdk macosx --show-sdk-version | tee logs/macos-sdk-version.txt | tee -a logs/build-summary.txt
+
+          echo "Available source zips:" | tee -a logs/build-summary.txt
+          find . -maxdepth 1 -type f -name "*.zip" | sort -V | tee -a logs/build-summary.txt
+
+          if [ -n "${SOURCE_ZIP_INPUT:-}" ]; then
+            ZIP="./${SOURCE_ZIP_INPUT}"
+          else
+            ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort -V | tail -n 1)
+          fi
+
+          echo "Using source zip: $ZIP" | tee -a logs/build-summary.txt
+          test -f "$ZIP"
+
+          NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
+          PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
+          BUILD_DIR="$GITHUB_WORKSPACE/build/$NAME"
+          LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
+          DMG_STAGE="$GITHUB_WORKSPACE/dmg-root/$NAME"
+          mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR" "$DMG_STAGE"
+
+          unzip -q "$ZIP" -d "$PROJECT_DIR"
+          cd "$PROJECT_DIR"
+
+          WORKSPACE=$(find . -name "*.xcworkspace" -type d | sort | head -n 1 || true)
+          PROJECT=$(find . -name "*.xcodeproj" -type d | sort | head -n 1 || true)
+          if [ -n "$WORKSPACE" ]; then
+            BUILD_KIND="workspace"
+            BUILD_FILE="$WORKSPACE"
+            XCODE_ARGS=(-workspace "$WORKSPACE")
+          else
+            BUILD_KIND="project"
+            BUILD_FILE="$PROJECT"
+            XCODE_ARGS=(-project "$PROJECT")
+          fi
+
+          echo "Using $BUILD_KIND: $BUILD_FILE" | tee "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          test -n "$BUILD_FILE"
+
+          xcodebuild -list "${XCODE_ARGS[@]}" | tee "$LOG_DIR/xcodebuild-list.txt"
+          SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
+          echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          test -n "$SCHEME"
+
+          echo "Patching local project copy for Mac Catalyst support when possible..." | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "SUPPORTS_MACCATALYST": "YES",
+              "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "YES",
+              "DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER": "NO",
+              "SUPPORTED_PLATFORMS": '"iphoneos iphonesimulator macosx"',
+              "TARGETED_DEVICE_FAMILY": '"1,2,6"',
+          }
+
+          for pbx in Path('.').rglob('project.pbxproj'):
+              text = pbx.read_text(errors='ignore')
+              original = text
+              for key, value in replacements.items():
+                  import re
+                  pattern = re.compile(rf'(?m)^(\s*){re.escape(key)}\s*=\s*[^;]+;')
+                  if pattern.search(text):
+                      text = pattern.sub(rf'\1{key} = {value};', text)
+                  else:
+                      text = text.replace('buildSettings = {', f'buildSettings = {{\n\t\t\t\t{key} = {value};')
+              if text != original:
+                  pbx.write_text(text)
+                  print(f'Patched {pbx}')
+          PY
+
+          set +e
+          xcodebuild clean build \
+            "${XCODE_ARGS[@]}" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk macosx \
+            -destination "generic/platform=macOS,variant=Mac Catalyst" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            SUPPORTS_MACCATALYST=YES \
+            SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD=YES \
+            DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER=NO \
+            SUPPORTED_PLATFORMS="iphoneos iphonesimulator macosx" \
+            TARGETED_DEVICE_FAMILY="1,2,6" \
+            BUILD_DIR="$BUILD_DIR" \
+            2>&1 | tee "$LOG_DIR/xcodebuild-maccatalyst.log"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift|Mac Catalyst|maccatalyst" "$LOG_DIR/xcodebuild-maccatalyst.log" > "$LOG_DIR/xcodebuild-maccatalyst-errors.txt" || true
+          tail -n 250 "$LOG_DIR/xcodebuild-maccatalyst.log" > "$LOG_DIR/xcodebuild-maccatalyst-last-250-lines.txt" || true
+
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Mac Catalyst build failed. Check diagnostics artifact." | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            cat "$LOG_DIR/xcodebuild-maccatalyst-errors.txt" | tail -n 120 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
+            exit "$STATUS"
+          fi
+
+          APP=$(find "$BUILD_DIR" -path "*/Release-maccatalyst/*.app" -type d | sort | head -n 1)
+          if [ -z "$APP" ]; then
+            APP=$(find "$BUILD_DIR" -name "*.app" -type d | sort | head -n 1)
+          fi
+          echo "Built app: $APP" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          test -n "$APP"
+
+          APP_BASENAME=$(basename "$APP")
+          cp -R "$APP" "$DMG_STAGE/"
+          ln -s /Applications "$DMG_STAGE/Applications"
+
+          # Ad-hoc sign helps local launch behavior, but this is not notarized.
+          /usr/bin/codesign --force --deep --sign - "$DMG_STAGE/$APP_BASENAME" 2>&1 | tee "$LOG_DIR/codesign.log" || true
+
+          DMG_PATH="$GITHUB_WORKSPACE/output/${NAME}-macos.dmg"
+          hdiutil create \
+            -volname "${NAME}" \
+            -srcfolder "$DMG_STAGE" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH" \
+            2>&1 | tee "$LOG_DIR/hdiutil-create.log"
+
+          hdiutil verify "$DMG_PATH" | tee "$LOG_DIR/hdiutil-verify.log"
+          shasum -a 256 "$DMG_PATH" | tee "$DMG_PATH.sha256" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+          ls -lh "$DMG_PATH" "$DMG_PATH.sha256" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: |
+            output/*.dmg
+            output/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-build-diagnostics
+          path: logs
+          if-no-files-found: warn
+          retention-days: 30
