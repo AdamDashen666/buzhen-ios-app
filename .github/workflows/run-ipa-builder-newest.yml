@@ -2,6 +2,10 @@ name: Run IPA Builder Newest
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - ".github/workflows/run-ipa-builder-newest.yml"
 
 permissions:
   contents: read
