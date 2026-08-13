@@ -34,19 +34,32 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
 
       - name: Build unsigned IPA
+        id: build_ipa
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p logs output work build
+
+          # Always record where this step stopped, even when it exits very early.
+          trap 'STATUS=$?; echo "$STATUS" > "$GITHUB_WORKSPACE/logs/build-exit-code.txt"; echo "Build step exit code: $STATUS" >> "$GITHUB_WORKSPACE/logs/build-summary.txt"' EXIT
+
           echo "Run IPA Builder Newest" | tee logs/build-summary.txt
+          echo "Run ID: $GITHUB_RUN_ID" | tee -a logs/build-summary.txt
+          echo "Run number/attempt: $GITHUB_RUN_NUMBER/$GITHUB_RUN_ATTEMPT" | tee -a logs/build-summary.txt
+          echo "Commit: $GITHUB_SHA" | tee -a logs/build-summary.txt
+          echo "Ref: $GITHUB_REF" | tee -a logs/build-summary.txt
           xcodebuild -version | tee logs/xcode-version.txt | tee -a logs/build-summary.txt
           xcrun --sdk iphoneos --show-sdk-version | tee logs/iphoneos-sdk-version.txt | tee -a logs/build-summary.txt
 
           echo "Available source zips:" | tee -a logs/build-summary.txt
-          find . -maxdepth 1 -type f -name "*.zip" | sort -V | tee -a logs/build-summary.txt
-          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | sort -V | tail -n 1)
-          echo "Using newest zip: $ZIP" | tee -a logs/build-summary.txt
+          find . -maxdepth 1 -type f -name "*.zip" -print | sort -V | tee logs/source-zips.txt | tee -a logs/build-summary.txt
+          ZIP=$(find . -maxdepth 1 -type f -name "*.zip" -print | sort -V | tail -n 1)
+          echo "Using newest zip: $ZIP" | tee logs/selected-source-zip.txt | tee -a logs/build-summary.txt
           test -n "$ZIP"
+
+          shasum -a 256 "$ZIP" | tee logs/source-zip.sha256
+          unzip -l "$ZIP" > logs/source-zip-contents.txt 2>&1 || true
+          unzip -t "$ZIP" > logs/source-zip-test.txt 2>&1 || true
 
           NAME=$(basename "$ZIP" .zip | tr -cd 'A-Za-z0-9._-')
           PROJECT_DIR="$GITHUB_WORKSPACE/work/$NAME"
@@ -54,19 +67,48 @@ jobs:
           LOG_DIR="$GITHUB_WORKSPACE/logs/$NAME"
           mkdir -p "$PROJECT_DIR" "$BUILD_DIR" "$LOG_DIR"
 
-          unzip -q "$ZIP" -d "$PROJECT_DIR"
+          set +e
+          unzip -q "$ZIP" -d "$PROJECT_DIR" > "$LOG_DIR/unzip.log" 2>&1
+          UNZIP_STATUS=$?
+          set -e
+          echo "$UNZIP_STATUS" > "$LOG_DIR/unzip-exit-code.txt"
+          if [ "$UNZIP_STATUS" -ne 0 ]; then
+            cat "$LOG_DIR/unzip.log" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            exit "$UNZIP_STATUS"
+          fi
+
           cd "$PROJECT_DIR"
+          find . -maxdepth 8 -type d \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) -print | sort > "$LOG_DIR/discovered-projects-workspaces.txt" || true
+          find . -maxdepth 8 -type f \( -name "Package.swift" -o -name "Package.resolved" -o -name "Podfile" -o -name "Podfile.lock" -o -name "Cartfile" -o -name "*.xcconfig" -o -name "*.entitlements" -o -name "Info.plist" \) -print | sort > "$LOG_DIR/discovered-config-files.txt" || true
+          find . -maxdepth 6 -print | sort > "$LOG_DIR/source-tree.txt" || true
+
           FILE=$(find . -name "*.xcodeproj" -type d | sort | head -n 1)
-          echo "Using project: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt"
+          echo "Using project: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
           test -n "$FILE"
 
-          xcodebuild -list -project "$FILE" | tee "$LOG_DIR/xcodebuild-list.txt"
+          # Save the pbxproj itself because malformed/missing file references often explain CI-only failures.
+          if [ -f "$FILE/project.pbxproj" ]; then
+            cp "$FILE/project.pbxproj" "$LOG_DIR/project.pbxproj.txt"
+          fi
+
+          set +e
+          xcodebuild -list -project "$FILE" 2>&1 | tee "$LOG_DIR/xcodebuild-list.txt"
+          LIST_STATUS=${PIPESTATUS[0]}
+          xcodebuild -list -json -project "$FILE" > "$LOG_DIR/xcodebuild-list.json" 2> "$LOG_DIR/xcodebuild-list-json.stderr.txt"
+          set -e
+          echo "$LIST_STATUS" > "$LOG_DIR/xcodebuild-list-exit-code.txt"
+          if [ "$LIST_STATUS" -ne 0 ]; then
+            exit "$LIST_STATUS"
+          fi
+
           SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$LOG_DIR/xcodebuild-list.txt")
           echo "Using scheme: $SCHEME" | tee -a "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
           test -n "$SCHEME"
 
+          # Preflight settings are extremely useful for deployment target, bundle ID,
+          # source paths, signing, architecture and SDK problems.
           set +e
-          xcodebuild clean build \
+          xcodebuild -showBuildSettings \
             -project "$FILE" \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -75,20 +117,50 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            > "$LOG_DIR/xcodebuild-showBuildSettings.txt" 2>&1
+          SETTINGS_STATUS=$?
+          set -e
+          echo "$SETTINGS_STATUS" > "$LOG_DIR/xcodebuild-showBuildSettings-exit-code.txt"
+
+          RESULT_BUNDLE="$LOG_DIR/Build.xcresult"
+          set +e
+          xcodebuild clean build \
+            -project "$FILE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -resultBundlePath "$RESULT_BUNDLE" \
+            -showBuildTimingSummary \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             BUILD_DIR="$BUILD_DIR" \
             2>&1 | tee "$LOG_DIR/xcodebuild.log"
           STATUS=${PIPESTATUS[0]}
           set -e
 
-          grep -nEi "error:|fatal error:|build failed|cannot find|no such module|undefined symbol|exit code 65|SwiftCompile|CompileSwift" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
-          tail -n 200 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-200-lines.txt" || true
+          echo "$STATUS" > "$LOG_DIR/xcodebuild-exit-code.txt"
+          grep -nEi "error:|fatal error:|warning:|build failed|failed|failure|cannot find|could not|no such module|no such file|not found|undefined symbol|duplicate symbol|exit code|code ?sign|provision|entitlement|deployment target|SwiftCompile|CompileSwift|Ld " "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-important-lines.txt" || true
+          grep -nEi "error:|fatal error:|build failed|cannot find|could not|no such module|no such file|not found|undefined symbol|duplicate symbol|exit code|failed with|provision|entitlement" "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-errors.txt" || true
+          tail -n 500 "$LOG_DIR/xcodebuild.log" > "$LOG_DIR/xcodebuild-last-500-lines.txt" || true
+
           if [ "$STATUS" -ne 0 ]; then
-            cat "$LOG_DIR/xcodebuild-errors.txt" | tail -n 80 | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
+            echo "xcodebuild failed with exit code $STATUS" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
+            tail -n 160 "$LOG_DIR/xcodebuild-errors.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt" || true
             exit "$STATUS"
           fi
 
           APP=$(find "$BUILD_DIR" -name "*.app" -type d | head -n 1)
+          echo "Built app: $APP" | tee "$LOG_DIR/built-app-path.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
           test -n "$APP"
+
+          find "$APP" -maxdepth 3 -print | sort > "$LOG_DIR/built-app-tree.txt" || true
+          if [ -f "$APP/Info.plist" ]; then
+            plutil -p "$APP/Info.plist" > "$LOG_DIR/built-app-Info.plist.txt" 2>&1 || true
+          fi
+          codesign -dvvv "$APP" > "$LOG_DIR/built-app-codesign.txt" 2>&1 || true
+
           PAYLOAD_DIR="$GITHUB_WORKSPACE/output/payload-$NAME"
           IPA_PATH="$GITHUB_WORKSPACE/output/${NAME}-unsigned.ipa"
           mkdir -p "$PAYLOAD_DIR/Payload"
@@ -96,9 +168,165 @@ jobs:
           cd "$PAYLOAD_DIR"
           /usr/bin/ditto -c -k --keepParent Payload "$IPA_PATH"
           cd "$GITHUB_WORKSPACE"
-          unzip -tq "$IPA_PATH"
+          unzip -t "$IPA_PATH" > "$LOG_DIR/ipa-unzip-test.txt" 2>&1
+          unzip -l "$IPA_PATH" > "$LOG_DIR/ipa-contents.txt" 2>&1 || true
           shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
           ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
+
+      - name: Collect full postmortem diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          DIAG="$GITHUB_WORKSPACE/logs/postmortem"
+          mkdir -p "$DIAG"
+
+          {
+            echo "=== GitHub Actions ==="
+            echo "GITHUB_WORKFLOW=$GITHUB_WORKFLOW"
+            echo "GITHUB_JOB=$GITHUB_JOB"
+            echo "GITHUB_RUN_ID=$GITHUB_RUN_ID"
+            echo "GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER"
+            echo "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
+            echo "GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME"
+            echo "GITHUB_SHA=$GITHUB_SHA"
+            echo "GITHUB_REF=$GITHUB_REF"
+            echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+            echo "RUNNER_OS=$RUNNER_OS"
+            echo "RUNNER_ARCH=$RUNNER_ARCH"
+            echo "RUNNER_NAME=$RUNNER_NAME"
+            echo "ImageOS=${ImageOS:-}"
+            echo "ImageVersion=${ImageVersion:-}"
+            echo "Timestamp UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          } > "$DIAG/github-run-context.txt" 2>&1
+
+          {
+            echo "=== macOS ==="
+            sw_vers
+            echo
+            uname -a
+            echo
+            echo "=== CPU ==="
+            sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+            sysctl -n hw.ncpu 2>/dev/null || true
+            echo
+            echo "=== Disk ==="
+            df -h
+            echo
+            echo "=== Workspace sizes ==="
+            du -sh "$GITHUB_WORKSPACE"/* 2>/dev/null || true
+          } > "$DIAG/runner-system.txt" 2>&1
+
+          {
+            echo "=== Selected developer directory ==="
+            xcode-select -p
+            echo
+            echo "=== Installed Xcodes ==="
+            find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V
+            echo
+            echo "=== Xcode ==="
+            xcodebuild -version
+            echo
+            echo "=== SDKs ==="
+            xcodebuild -showsdks
+            echo
+            echo "iphoneos SDK version:"
+            xcrun --sdk iphoneos --show-sdk-version
+            echo "iphoneos SDK build version:"
+            xcrun --sdk iphoneos --show-sdk-build-version
+            echo "iphoneos SDK path:"
+            xcrun --sdk iphoneos --show-sdk-path
+            echo
+            echo "=== Swift ==="
+            xcrun swiftc --version
+            echo
+            echo "=== Clang ==="
+            xcrun clang --version
+          } > "$DIAG/toolchain.txt" 2>&1
+
+          {
+            echo "=== Repository root ==="
+            ls -la "$GITHUB_WORKSPACE"
+            echo
+            echo "=== Repository/work/source tree (depth <= 6) ==="
+            find "$GITHUB_WORKSPACE" -maxdepth 6 \
+              -not -path "$GITHUB_WORKSPACE/.git/*" \
+              -not -path "$GITHUB_WORKSPACE/build/*" \
+              -print | sed "s#^$GITHUB_WORKSPACE/##" | sort
+          } > "$DIAG/workspace-tree.txt" 2>&1
+
+          {
+            echo "=== ZIP files ==="
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -name '*.zip' -print -exec ls -lh {} \; -exec shasum -a 256 {} \;
+            echo
+            for z in "$GITHUB_WORKSPACE"/*.zip; do
+              [ -f "$z" ] || continue
+              echo "===== unzip -t: $z ====="
+              unzip -t "$z"
+              echo
+            done
+          } > "$DIAG/source-zip-validation.txt" 2>&1
+
+          {
+            echo "=== Xcode projects/workspaces ==="
+            find "$GITHUB_WORKSPACE/work" -type d \( -name '*.xcodeproj' -o -name '*.xcworkspace' \) -print 2>/dev/null | sort
+            echo
+            echo "=== Project/configuration files ==="
+            find "$GITHUB_WORKSPACE/work" -type f \( \
+              -name 'project.pbxproj' -o \
+              -name 'Package.swift' -o \
+              -name 'Package.resolved' -o \
+              -name 'Podfile' -o \
+              -name 'Podfile.lock' -o \
+              -name 'Cartfile' -o \
+              -name '*.xcconfig' -o \
+              -name '*.entitlements' -o \
+              -name 'Info.plist' \
+            \) -print 2>/dev/null | sort
+          } > "$DIAG/project-discovery.txt" 2>&1
+
+          # If the build reached xcodebuild, export xcresult JSON as a searchable text file.
+          RESULT=$(find "$GITHUB_WORKSPACE/logs" -type d -name '*.xcresult' -print 2>/dev/null | head -n 1)
+          if [ -n "$RESULT" ] && [ -d "$RESULT" ]; then
+            echo "$RESULT" > "$DIAG/xcresult-path.txt"
+            xcrun xcresulttool get object --legacy --path "$RESULT" --format json \
+              > "$DIAG/xcresult.json" 2> "$DIAG/xcresulttool.stderr.txt" || true
+          else
+            echo "No .xcresult bundle was produced before the failure." > "$DIAG/xcresult-path.txt"
+          fi
+
+          # Re-run non-destructive project introspection even if the main build step died early.
+          PROJECT=$(find "$GITHUB_WORKSPACE/work" -type d -name '*.xcodeproj' -print 2>/dev/null | sort | head -n 1)
+          if [ -n "$PROJECT" ] && [ -d "$PROJECT" ]; then
+            xcodebuild -list -project "$PROJECT" > "$DIAG/recovery-xcodebuild-list.txt" 2>&1 || true
+            xcodebuild -list -json -project "$PROJECT" > "$DIAG/recovery-xcodebuild-list.json" 2> "$DIAG/recovery-xcodebuild-list-json.stderr.txt" || true
+            SCHEME=$(awk '/Schemes:/{f=1;next} f && NF {print $1; exit}' "$DIAG/recovery-xcodebuild-list.txt")
+            if [ -n "$SCHEME" ]; then
+              xcodebuild -showBuildSettings \
+                -project "$PROJECT" \
+                -scheme "$SCHEME" \
+                -configuration Release \
+                -sdk iphoneos \
+                -destination "generic/platform=iOS" \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGN_IDENTITY="" \
+                > "$DIAG/recovery-showBuildSettings.txt" 2>&1 || true
+            else
+              echo "No scheme could be parsed." > "$DIAG/recovery-showBuildSettings.txt"
+            fi
+          else
+            echo "No .xcodeproj found after extraction." > "$DIAG/recovery-xcodebuild-list.txt"
+          fi
+
+          # Consolidated index so a diagnostics ZIP can be inspected quickly.
+          {
+            echo "Diagnostics generated:"
+            find "$GITHUB_WORKSPACE/logs" -maxdepth 4 -type f -print | sed "s#^$GITHUB_WORKSPACE/logs/##" | sort
+            echo
+            echo "xcresult bundles:"
+            find "$GITHUB_WORKSPACE/logs" -maxdepth 4 -type d -name '*.xcresult' -print | sed "s#^$GITHUB_WORKSPACE/logs/##" | sort
+          } > "$DIAG/diagnostics-index.txt" 2>&1
 
       - name: Upload IPA artifact
         if: success()
