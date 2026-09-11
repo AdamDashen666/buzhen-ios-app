@@ -203,7 +203,7 @@ struct FolderPickerPresenter: UIViewControllerRepresentable {
 final class FolderPickerHostController: UIViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
     var onEvent: (@MainActor (String) -> Void)?
     var completion: (@MainActor (Result<URL?, Error>) -> Void)?
-    private var picker: ObservedFolderPicker?
+    private var picker: UIDocumentPickerViewController?
     private var requested = false
     private var delivered = false
 
@@ -232,21 +232,11 @@ final class FolderPickerHostController: UIViewController, UIDocumentPickerDelega
 
     private func presentIfNeeded() {
         guard requested, picker == nil, viewIfLoaded?.window != nil else { return }
-        let picker = ObservedFolderPicker(forOpeningContentTypes: [.folder], asCopy: false)
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
         picker.delegate = self
         picker.allowsMultipleSelection = false
         picker.shouldShowFileExtensions = true
         picker.modalPresentationStyle = .formSheet
-        picker.onDisappear = { [weak self, weak picker] in
-            guard let self, let picker else { return }
-            self.onEvent?("原生文件选择器已离开屏幕")
-            // Check after UIKit's dismissal transaction, not after an arbitrary delay.
-            DispatchQueue.main.async { [weak self, weak picker] in
-                guard let self, let picker, self.picker === picker,
-                      !self.delivered, picker.presentingViewController == nil else { return }
-                self.finish(.failure(FolderPickerError.missingResult), from: picker)
-            }
-        }
         self.picker = picker
         delivered = false
         onEvent?("原生文件选择器已创建，代理已绑定")
@@ -292,16 +282,6 @@ final class FolderPickerHostController: UIViewController, UIDocumentPickerDelega
                 self.presentIfNeeded()
             }
         } else { picker = nil }
-    }
-}
-
-@MainActor
-final class ObservedFolderPicker: UIDocumentPickerViewController {
-    var onDisappear: (@MainActor () -> Void)?
-
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        onDisappear?()
     }
 }
 
