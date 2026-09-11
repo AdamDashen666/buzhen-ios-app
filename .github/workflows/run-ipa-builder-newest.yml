@@ -196,9 +196,14 @@ jobs:
             xcodebuild build -project "$PROJECT" -target FolderProviderFixture \
               -configuration Debug -sdk iphonesimulator \
               CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/FixtureBuild" \
+              ONLY_ACTIVE_ARCH=NO \
               CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$GITHUB_WORKSPACE/logs/external-fixture-build.log"
+            plutil -p "$GITHUB_WORKSPACE/FixtureBuild/FolderProviderFixture.app/Info.plist" \
+              > "$GITHUB_WORKSPACE/logs/external-fixture-plist.txt"
             xcrun simctl install "$DEVICE" "$GITHUB_WORKSPACE/FixtureBuild/FolderProviderFixture.app"
             xcrun simctl launch "$DEVICE" com.example.CodexPad.FolderProviderFixture
+            FIXTURE_DATA=$(xcrun simctl get_app_container "$DEVICE" com.example.CodexPad.FolderProviderFixture data)
+            echo "$FIXTURE_DATA" > "$GITHUB_WORKSPACE/logs/external-fixture-container.txt"
           fi
           set +e
           xcodebuild test \

@@ -57,6 +57,11 @@ final class CodexPadUITests: XCTestCase {
     }
 
     func testExternalDocumentPickerOpensWritesAndRestoresFolder() throws {
+        let fixture = XCUIApplication(bundleIdentifier: "com.example.CodexPad.FolderProviderFixture")
+        fixture.launch()
+        XCTAssertTrue(fixture.staticTexts["外部目录已准备"].waitForExistence(timeout: 20))
+        screenshot("external-fixture-ready", app: fixture)
+        fixture.terminate()
         let app = launch(["--ui-picker"])
         XCUIDevice.shared.orientation = .landscapeLeft
         let open = app.buttons["open-folder"].firstMatch
