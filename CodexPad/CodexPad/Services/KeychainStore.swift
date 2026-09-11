@@ -1,9 +1,11 @@
 import Foundation
 import Security
 
-struct KeychainStore {
-    private let service = "CodexPad.API"
+struct KeychainStore: Sendable {
+    let service: String
     private let account = "api-key"
+
+    init(service: String = "CodexPad.API") { self.service = service }
 
     func saveAPIKey(_ value: String) throws {
         let data = Data(value.utf8)

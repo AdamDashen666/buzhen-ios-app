@@ -41,6 +41,7 @@ struct RootView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
+        .preferredColorScheme(testColorScheme)
         .sheet(isPresented: $app.showingFolderImporter) {
             FolderPicker { result in
                 switch result {
@@ -81,6 +82,12 @@ struct RootView: View {
             Button("确定", role: .cancel) { workspace.errorMessage = nil; agent.errorMessage = nil }
         } message: { Text(workspace.errorMessage ?? agent.errorMessage ?? "请重试。") }
         .task {
+            #if targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("--ui-fixture") || ProcessInfo.processInfo.arguments.contains("--ui-picker") {
+                await prepareUITestFixture()
+                return
+            }
+            #endif
             workspace.restoreRecentProject()
             await settings.refreshIfNeeded()
         }
@@ -94,6 +101,34 @@ struct RootView: View {
             } else if phase == .background { agent.stop() }
         }
     }
+
+    private var testColorScheme: ColorScheme? {
+        #if targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains("--ui-dark") ? .dark : nil
+        #else
+        nil
+        #endif
+    }
+
+    #if targetEnvironment(simulator)
+    private func prepareUITestFixture() async {
+        do {
+            let root = try await Task.detached {
+                let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                let folder = documents.appendingPathComponent("示例项目")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try Data("# 示例项目\n\n你好，CodexPad。\n".utf8).write(to: folder.appendingPathComponent("README.md"))
+                try Data("import Foundation\n\nlet greeting = \"你好\"\nprint(greeting)\n".utf8).write(to: folder.appendingPathComponent("主程序.swift"))
+                return folder
+            }.value
+            if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
+                workspace.openFolder(root)
+                await workspace.waitForOpening()
+                pane = 0
+            }
+        } catch { workspace.errorMessage = WorkspaceStore.describe(error) }
+    }
+    #endif
 
     private var sidebar: some View {
         FileSidebarView(onOpenFile: { request(.file($0, $1)) },

@@ -28,7 +28,7 @@ struct FileSnapshot: Sendable {
 }
 
 enum WorkspaceFileError: LocalizedError {
-    case noWorkspace, rootMutation, cancelled, changed, invalidReplacement, tooManyEntries
+    case noWorkspace, rootMutation, cancelled, changed, invalidReplacement, tooManyEntries, timedOut
     case binaryOrInvalidUTF8(String), tooLarge(String), symlinkNotAllowed(String)
     case notFound(String), alreadyExists(String), directoryNotEmpty(String), io(String, Int32)
 
@@ -40,6 +40,7 @@ enum WorkspaceFileError: LocalizedError {
         case .changed: return "文件已被其他操作修改、移动或删除。为避免覆盖，已停止保存；请重新读取后审查。"
         case .invalidReplacement: return "原文必须非空且恰好匹配一处。请提供更完整的上下文。"
         case .tooManyEntries: return "此目录超过 5000 个项目，请选择更小的项目目录。"
+        case .timedOut: return "文件提供器响应超时。请确认 iCloud 文件已下载，或稍后重新打开。"
         case .binaryOrInvalidUTF8(let path): return "\(path) 不是 UTF-8 文本，无法在代码编辑器中打开。"
         case .tooLarge(let path): return "\(path) 超过 2 MB 文本编辑上限。"
         case .symlinkNotAllowed(let path): return "已阻止符号链接访问：\(path)"
@@ -61,11 +62,18 @@ enum WorkspaceFileError: LocalizedError {
 struct WorkspaceFileService: Sendable {
     let rootURL: URL
     private let rootHandle: DirectoryHandle
+    private var cancellation: FileOperationControl?
     static let maxTextBytes = 2 * 1024 * 1024
 
     init(rootURL: URL) throws {
         self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
         rootHandle = try DirectoryHandle(url: self.rootURL)
+    }
+
+    func controlled(by control: FileOperationControl) -> Self {
+        var copy = self
+        copy.cancellation = control
+        return copy
     }
 
     func listDirectory(path: String) throws -> [WorkspaceEntry] {
@@ -74,7 +82,7 @@ struct WorkspaceFileService: Sendable {
     }
 
     func readSnapshot(path: String) throws -> FileSnapshot {
-        try coordinate {
+        try coordinate(path: path) {
             let data = try readData(path: path)
             guard !data.contains(0), let text = String(data: data, encoding: .utf8) else {
                 throw WorkspaceFileError.binaryOrInvalidUTF8(path)
@@ -340,15 +348,28 @@ struct WorkspaceFileService: Sendable {
     private func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     private func failure(_ path: String) -> WorkspaceFileError { .io(path, errno) }
 
-    private func coordinate<T>(writing: Bool = false, _ body: @escaping () throws -> T) throws -> T {
+    private func coordinate<T>(path: String? = nil, writing: Bool = false, _ body: @escaping () throws -> T) throws -> T {
         try Task.checkCancellation()
+        try cancellation?.check()
+        let target: URL
+        if let path {
+            try withParent(path) { parent, leaf in
+                var info = stat()
+                guard fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw failure(path) }
+                guard info.st_mode & S_IFMT != S_IFLNK else { throw WorkspaceFileError.symlinkNotAllowed(path) }
+            }
+            target = rootURL.appendingPathComponent(try WorkspacePathGuard.normalize(path))
+        } else { target = rootURL }
         var error: NSError?
         var result: Result<T, Error>?
         let coordinator = NSFileCoordinator()
+        try cancellation?.register(coordinator)
+        defer { cancellation?.unregister() }
         let accessor: (URL) -> Void = { url in
             result = Result {
                 try Task.checkCancellation()
-                guard url.standardizedFileURL == rootURL else {
+                try cancellation?.check()
+                guard url.standardizedFileURL == target.standardizedFileURL else {
                     throw WorkspaceFileError.changed
                 }
                 var live = stat()
@@ -360,13 +381,40 @@ struct WorkspaceFileService: Sendable {
             }
         }
         if writing {
-            coordinator.coordinate(writingItemAt: rootURL, options: [], error: &error, byAccessor: accessor)
+            coordinator.coordinate(writingItemAt: target, options: [], error: &error, byAccessor: accessor)
         } else {
-            coordinator.coordinate(readingItemAt: rootURL, options: [], error: &error, byAccessor: accessor)
+            coordinator.coordinate(readingItemAt: target, options: [], error: &error, byAccessor: accessor)
         }
+        try cancellation?.check()
         if let error { throw error }
         guard let result else { throw WorkspaceFileError.cancelled }
         return try result.get()
+    }
+}
+
+final class FileOperationControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var coordinator: NSFileCoordinator?
+    private var cancelled = false
+    private var timeout = false
+    var timedOut: Bool { lock.withLock { timeout } }
+    func register(_ coordinator: NSFileCoordinator) throws {
+        try lock.withLock {
+            if cancelled { throw CancellationError() }
+            self.coordinator = coordinator
+        }
+    }
+    func unregister() { lock.withLock { coordinator = nil } }
+    func cancel(timeout: Bool = false) {
+        let current = lock.withLock {
+            cancelled = true
+            self.timeout = self.timeout || timeout
+            return coordinator
+        }
+        current?.cancel()
+    }
+    func check() throws {
+        if lock.withLock({ cancelled }) { throw CancellationError() }
     }
 }
 

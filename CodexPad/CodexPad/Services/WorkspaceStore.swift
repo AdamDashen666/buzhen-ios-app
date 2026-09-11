@@ -16,16 +16,29 @@ final class WorkspaceSession: @unchecked Sendable {
     deinit { if hasScope { url.stopAccessingSecurityScopedResource() } }
 
     func perform<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceFileService) throws -> T) async throws -> T {
+        let control = FileOperationControl()
         let job = Task.detached(priority: .userInitiated) { [self] in
             try lock.withLock {
                 try Task.checkCancellation()
                 if fileService == nil { fileService = try WorkspaceFileService(rootURL: url) }
-                return try operation(fileService!)
+                return try operation(fileService!.controlled(by: control))
             }
         }
-        return try await withTaskCancellationHandler {
-            try await job.value
-        } onCancel: { job.cancel() }
+        let timeout = Task.detached {
+            do { try await Task.sleep(for: .seconds(30)) }
+            catch { return }
+            control.cancel(timeout: true)
+            job.cancel()
+        }
+        defer { timeout.cancel() }
+        do {
+            return try await withTaskCancellationHandler {
+                try await job.value
+            } onCancel: { control.cancel(); job.cancel() }
+        } catch {
+            if control.timedOut { throw WorkspaceFileError.timedOut }
+            throw error
+        }
     }
 
     func bookmark() async throws -> Data {
@@ -114,6 +127,8 @@ final class WorkspaceStore: ObservableObject {
         openGeneration = UUID()
         isOpening = false
     }
+
+    func waitForOpening() async { await openTask?.value }
 
     func closeFolder() {
         guard !isDirty, !isSavingFile else { errorMessage = "请先保存或放弃当前修改。"; return }

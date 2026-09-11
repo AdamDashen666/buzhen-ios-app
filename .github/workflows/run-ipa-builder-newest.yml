@@ -177,6 +177,34 @@ jobs:
           shasum -a 256 "$IPA_PATH" | tee "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
           ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
 
+      - name: Run iPad UI regression tests
+        timeout-minutes: 18
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT=$(find "$GITHUB_WORKSPACE/work" -name "CodexPad.xcodeproj" -type d | head -n 1)
+          if [ -z "$PROJECT" ] || [ ! -d "$(dirname "$PROJECT")/UITests" ]; then
+            echo "This source package has no iPad UI test target."
+            exit 0
+          fi
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; ds=[d for a in json.load(sys.stdin)["devices"].values() for d in a if "iPad" in d["name"]]; print(ds[0]["udid"] if ds else "")')
+          test -n "$DEVICE"
+          echo "$DEVICE" > logs/ui-test-device.txt
+          set +e
+          xcodebuild test \
+            -project "$PROJECT" -scheme CodexPad \
+            -destination "platform=iOS Simulator,id=$DEVICE" \
+            -derivedDataPath "$GITHUB_WORKSPACE/SimulatorBuild" \
+            -resultBundlePath "$GITHUB_WORKSPACE/logs/UITests.xcresult" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$GITHUB_WORKSPACE/logs/ui-tests.log"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          xcrun xcresulttool export attachments --path "$GITHUB_WORKSPACE/logs/UITests.xcresult" \
+            --output-path "$GITHUB_WORKSPACE/logs/screenshots" || true
+          exit "$STATUS"
+
       - name: Collect full postmortem diagnostics
         if: always()
         shell: bash

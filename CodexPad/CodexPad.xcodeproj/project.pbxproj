@@ -6,6 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		ABC000000000000000000001 /* CodexPadUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC000000000000000000002; };
 		5F4AFDB1F57EBED596D0EC74 /* CodexPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B0C298BCD69DAECADC0B65 /* CodexPadApp.swift */; };
 		9ED945E8C366A6677A450594 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C2A23D39B70D2D539B0B63F /* AppSettings.swift */; };
 		AC78336EC8D3BA65B828E2E0 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7216B2734E9E047941D66BAC /* AppState.swift */; };
@@ -30,6 +31,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		ABC000000000000000000002 /* CodexPadUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITests/CodexPadUITests.swift; sourceTree = "<group>"; };
+		ABC000000000000000000003 /* CodexPadUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodexPadUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		65B0C298BCD69DAECADC0B65 /* CodexPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexPadApp.swift; sourceTree = "<group>"; };
 		0C2A23D39B70D2D539B0B63F /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		7216B2734E9E047941D66BAC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -63,6 +66,7 @@
 		7FEFA489E25E19BEF8A8A2A9 /* Main Group */ = {
 			isa = PBXGroup;
 			children = (
+				ABC000000000000000000002,
 				183C0636153141BB45F848F7 /* CodexPad */,
 				3762C0F227309A1D7C77B711 /* CodexPadCore */,
 				5015CD1BF7713BE910007C79 /* Products */,
@@ -140,6 +144,7 @@
 		5015CD1BF7713BE910007C79 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				ABC000000000000000000003,
 				3D42DE5DEC713AA055793100 /* CodexPad.app */,
 			);
 			sourceTree = "<group>";
@@ -147,6 +152,17 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		ABC000000000000000000004 /* CodexPadUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ABC000000000000000000005;
+			buildPhases = (ABC000000000000000000006);
+			buildRules = ();
+			dependencies = (ABC000000000000000000007);
+			name = CodexPadUITests;
+			productName = CodexPadUITests;
+			productReference = ABC000000000000000000003;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		0E8A3AD980EC179856012B7E /* CodexPad */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = FF1EB33CB90090982057DE00 /* Build configuration list for PBXNativeTarget "CodexPad" */;
@@ -165,7 +181,7 @@
 			buildConfigurationList = AE9DBEB92A3A454136EF894A /* Build configuration list for PBXProject "CodexPad" */;
 			compatibilityVersion = "Xcode 16.0"; developmentRegion = zh_CN; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", Base);
 			mainGroup = 7FEFA489E25E19BEF8A8A2A9; productRefGroup = 5015CD1BF7713BE910007C79 /* Products */; projectDirPath = ""; projectRoot = "";
-			targets = (0E8A3AD980EC179856012B7E /* CodexPad */);
+			targets = (0E8A3AD980EC179856012B7E /* CodexPad */, ABC000000000000000000004);
 		};
 /* End PBXProject section */
 
@@ -174,6 +190,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		ABC000000000000000000006 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (ABC000000000000000000001); runOnlyForDeploymentPostprocessing = 0; };
 		1CE6DC2571680BAD24FA2D71 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
 			5F4AFDB1F57EBED596D0EC74 /* CodexPadApp.swift in Sources */,
 			9ED945E8C366A6677A450594 /* AppSettings.swift in Sources */,
@@ -198,7 +215,21 @@
 		); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		ABC000000000000000000007 = {isa = PBXTargetDependency; target = 0E8A3AD980EC179856012B7E; };
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		ABC000000000000000000008 = {
+			isa = XCBuildConfiguration;
+			buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = com.example.CodexPad.UITests; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 2; TEST_TARGET_NAME = CodexPad; CODE_SIGN_STYLE = Automatic; SDKROOT = iphoneos; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; };
+			name = Debug;
+		};
+		ABC000000000000000000009 = {
+			isa = XCBuildConfiguration;
+			buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = com.example.CodexPad.UITests; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 2; TEST_TARGET_NAME = CodexPad; CODE_SIGN_STYLE = Automatic; SDKROOT = iphoneos; };
+			name = Release;
+		};
 		A3726B02B7B14ACAA02A9797 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -230,6 +261,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		ABC000000000000000000005 = {isa = XCConfigurationList; buildConfigurations = (ABC000000000000000000008, ABC000000000000000000009); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		AE9DBEB92A3A454136EF894A /* Build configuration list for PBXProject "CodexPad" */ = {isa = XCConfigurationList; buildConfigurations = (A3726B02B7B14ACAA02A9797 /* Debug */, 8B19A7CE913C88F396775294 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		FF1EB33CB90090982057DE00 /* Build configuration list for PBXNativeTarget "CodexPad" */ = {isa = XCConfigurationList; buildConfigurations = (48BBFFD881E4E1EFBD2D18CF /* Debug */, 7320814380A01830A6B16D6A /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */

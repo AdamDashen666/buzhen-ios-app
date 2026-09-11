@@ -11,12 +11,16 @@ final class AppSettings: ObservableObject {
     @Published private(set) var hasKey = false
     @Published var autoApply: Bool { didSet { defaults.set(autoApply, forKey: "agent.autoApply") } }
     private let defaults: UserDefaults
-    private let keychain = KeychainStore()
+    private let keychain: KeychainStore
+    private let clientFactory: @Sendable (URL, String) -> OpenAIResponsesClient
     private var detectionTask: Task<String, Error>?
     private var generation = UUID()
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, keychain: KeychainStore = KeychainStore(),
+         clientFactory: @escaping @Sendable (URL, String) -> OpenAIResponsesClient = { OpenAIResponsesClient(baseURL: $0, apiKey: $1) }) {
         self.defaults = defaults
+        self.keychain = keychain
+        self.clientFactory = clientFactory
         baseURL = defaults.string(forKey: "api.baseURL") ?? "https://api.openai.com/v1"
         autoApply = defaults.bool(forKey: "agent.autoApply")
         hasKey = (try? keychain.loadAPIKey()) != nil
@@ -57,7 +61,7 @@ final class AppSettings: ObservableObject {
 
     func client() throws -> OpenAIResponsesClient {
         guard let key = try keychain.loadAPIKey(), !key.isEmpty else { throw SettingsError.missingKey }
-        return OpenAIResponsesClient(baseURL: try OpenAIResponsesClient.normalizedBaseURL(baseURL), apiKey: key)
+        return clientFactory(try OpenAIResponsesClient.normalizedBaseURL(baseURL), key)
     }
 
     func refreshIfNeeded() async {
@@ -83,8 +87,9 @@ final class AppSettings: ObservableObject {
         let current = generation
         isDetecting = true
         modelStatus = "正在读取模型并验证工具调用…"
+        let factory = clientFactory
         let task = Task<String, Error> { [weak self] in
-            let client = OpenAIResponsesClient(baseURL: url, apiKey: key)
+            let client = factory(url, key)
             defer { client.invalidate() }
             var listError: Error?
             var candidates: [String] = []
