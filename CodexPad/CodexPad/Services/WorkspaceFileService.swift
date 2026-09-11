@@ -121,7 +121,7 @@ struct WorkspaceFileService: Sendable {
             let revision = try itemRevision(path, includeChildren: kind == .move)
             let old = try? readData(path: path)
             return PendingChange(kind: kind, path: path, destinationPath: destination,
-                                 originalText: old.flatMap { String(data: $0, encoding: .utf8) },
+                                 originalText: old.flatMap { $0.contains(0) ? nil : String(data: $0, encoding: .utf8) },
                                  proposedText: "", baseline: revision)
         }
     }

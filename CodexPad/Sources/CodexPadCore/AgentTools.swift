@@ -58,7 +58,7 @@ public enum AgentToolCatalog {
             "path": .init(description: "工作区相对文件路径。"),
             "content": .init(description: "文件的完整新内容。")
         ]),
-        .init(name: "create_file", description: "提议创建新的 UTF-8 文本文件。确认后会按需创建父目录。", properties: [
+        .init(name: "create_file", description: "提议创建新的 UTF-8 文本文件，不覆盖同名文件。父目录必须存在，否则先用 create_directory 创建。", properties: [
             "path": .init(description: "工作区相对的新文件路径。"),
             "content": .init(description: "新文件的完整内容。")
         ]),

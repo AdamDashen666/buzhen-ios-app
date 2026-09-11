@@ -15,6 +15,19 @@ struct FileSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if workspace.rootURL != nil && !workspace.isOpening {
+                HStack(spacing: 8) {
+                    Text(workspace.displayName).font(.headline).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("新建文件", systemImage: "doc.badge.plus") { operation = .init(kind: .create, path: "") }
+                        Button("新建文件夹", systemImage: "folder.badge.plus") { operation = .init(kind: .createDirectory, path: "") }
+                    } label: { Image(systemName: "plus").frame(width: 36, height: 36) }
+                        .accessibilityLabel("新建").disabled(!canMutate)
+                }
+                .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 4)
+                Divider()
+            }
             if workspace.isOpening {
                 VStack(spacing: 16) {
                     ProgressView("正在打开项目…")
@@ -74,7 +87,7 @@ struct FileSidebarView: View {
                 }
             }
         }
-        .navigationTitle(workspace.displayName)
+        .navigationTitle("项目")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "搜索文件与内容")
         .task(id: query) {
@@ -94,17 +107,11 @@ struct FileSidebarView: View {
         .onChange(of: workspace.session?.id) { _, _ in query = ""; results = nil; expanded = [] }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { Task { await workspace.refreshTree() } } label: { Image(systemName: "arrow.clockwise") }
-                    .help("刷新文件列表").accessibilityLabel("刷新文件列表")
-                    .disabled(workspace.session == nil || workspace.isOpening || workspace.isLoadingTree)
-                Menu {
-                    Button("新建文件", systemImage: "doc.badge.plus") { operation = .init(kind: .create, path: "") }
-                    Button("新建文件夹", systemImage: "folder.badge.plus") { operation = .init(kind: .createDirectory, path: "") }
-                } label: { Image(systemName: "plus") }
-                    .accessibilityLabel("新建").disabled(!canMutate)
                 Menu {
                     Button("打开文件夹", systemImage: "folder.badge.plus", action: onOpenProject)
                         .disabled(agent.isRunning || workspace.isBusy)
+                    Button("刷新文件列表", systemImage: "arrow.clockwise") { Task { await workspace.refreshTree() } }
+                        .disabled(workspace.session == nil || workspace.isOpening || workspace.isLoadingTree)
                     Button("设置", systemImage: "gearshape") { app.showingSettings = true }
                     if workspace.session != nil {
                         Button("关闭项目", systemImage: "xmark.circle", role: .destructive, action: onCloseProject)

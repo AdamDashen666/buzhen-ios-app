@@ -214,7 +214,7 @@ jobs:
           set +e
           DIAG="$GITHUB_WORKSPACE/logs/postmortem"
           mkdir -p "$DIAG"
-          if [ -d "$GITHUB_WORKSPACE/logs/UITests.xcresult" ]; then
+          if [ -d "$GITHUB_WORKSPACE/logs/UITests.xcresult" ] && [ ! -f "$GITHUB_WORKSPACE/logs/screenshots/manifest.json" ]; then
             xcrun xcresulttool export attachments --path "$GITHUB_WORKSPACE/logs/UITests.xcresult" \
               --output-path "$GITHUB_WORKSPACE/logs/screenshots" || true
           fi
