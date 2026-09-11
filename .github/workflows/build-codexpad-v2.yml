@@ -42,6 +42,8 @@ jobs:
           mkdir -p source
           unzip -q CodexPad-v2-cn.zip -d source
           test -d source/CodexPad/CodexPad.xcodeproj
+          python3 codexpad_payload/apply_xcode_fix.py
+          grep -q "ModelAutoSelector.swift in Sources" source/CodexPad/CodexPad.xcodeproj/project.pbxproj
 
       - name: Run Core tests
         shell: bash
