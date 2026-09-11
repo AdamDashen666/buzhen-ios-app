@@ -1,0 +1,6 @@
+outputs/
+.tools/
+CodexPad/.build/
+CodexPad/.swiftpm/
+**/xcuserdata/
+**/.DS_Store

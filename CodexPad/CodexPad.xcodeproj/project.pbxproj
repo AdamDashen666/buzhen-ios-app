@@ -1,0 +1,239 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5F4AFDB1F57EBED596D0EC74 /* CodexPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B0C298BCD69DAECADC0B65 /* CodexPadApp.swift */; };
+		9ED945E8C366A6677A450594 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C2A23D39B70D2D539B0B63F /* AppSettings.swift */; };
+		AC78336EC8D3BA65B828E2E0 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7216B2734E9E047941D66BAC /* AppState.swift */; };
+		A7C68B071C15495C40C747A9 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DCA6D605F08FAAC18BC6878 /* KeychainStore.swift */; };
+		AE7C3FE34C887189ADFA97A3 /* WorkspaceFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E2FF55F3BDEB5B962A0B82 /* WorkspaceFileService.swift */; };
+		BDD188D3F4E8046EF79A6539 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05049490B8B28051EF87CB4E /* WorkspaceStore.swift */; };
+		EFFD8ED07C1DE3186E926797 /* OpenAIResponsesClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA50429BDE0A2DAD3FB4815 /* OpenAIResponsesClient.swift */; };
+		99B80E5F770DD35388DCEBE7 /* AgentController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74A420420849A56EBEE01415 /* AgentController.swift */; };
+		4183EC7367DDAF3ABBF9F02E /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A34C99C1BCF5A994D5943B4D /* RootView.swift */; };
+		5E4E03ADB636115B4A29D64C /* FileSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113502B764D4B389A140793E /* FileSidebarView.swift */; };
+		2B3223F08EC0166AA0757DE3 /* EditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6D12083E9C1930607F92F5 /* EditorView.swift */; };
+		13DA814AF4A1414E41049C35 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846EAC7AAB98111535D876A7 /* AgentView.swift */; };
+		DFC5EFC0D800879CC80BCE47 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE48BF64EE8AEB082B5EA485 /* SettingsView.swift */; };
+		DED57E3A1C9E12972041B783 /* AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2229EDF85325CA5D6D2B38E9 /* AgentTools.swift */; };
+		F0A1B2C3D4E5F60718293A4B /* ModelAutoSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* ModelAutoSelector.swift */; };
+		DAB25CCE9267876EEC2F74E7 /* PendingChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = E18191EA33C8E2AF2A17FCA2 /* PendingChange.swift */; };
+		61195BBB083F4CAAAFC7DA00 /* ResponsesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D005C06F5101A721F18521C /* ResponsesModels.swift */; };
+		B55DC60F00F86792BDD91928 /* SensitivePathPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37562F7AFDFE4A9689D3D3C /* SensitivePathPolicy.swift */; };
+		A884C413639B428B361D7EF1 /* TextDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ECBBF04775C658A626AE3BE /* TextDiff.swift */; };
+		461F8FDF7FB93B9A5DCB09E2 /* WorkspacePathGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39472911CB7B790299C458CC /* WorkspacePathGuard.swift */; };
+		8D63F56C1A04DEFA45983528 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 03BFA2D58A3BA660C040E7BA /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		65B0C298BCD69DAECADC0B65 /* CodexPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexPadApp.swift; sourceTree = "<group>"; };
+		0C2A23D39B70D2D539B0B63F /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		7216B2734E9E047941D66BAC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		0DCA6D605F08FAAC18BC6878 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		63E2FF55F3BDEB5B962A0B82 /* WorkspaceFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFileService.swift; sourceTree = "<group>"; };
+		05049490B8B28051EF87CB4E /* WorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStore.swift; sourceTree = "<group>"; };
+		1CA50429BDE0A2DAD3FB4815 /* OpenAIResponsesClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIResponsesClient.swift; sourceTree = "<group>"; };
+		74A420420849A56EBEE01415 /* AgentController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentController.swift; sourceTree = "<group>"; };
+		A34C99C1BCF5A994D5943B4D /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		113502B764D4B389A140793E /* FileSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSidebarView.swift; sourceTree = "<group>"; };
+		4A6D12083E9C1930607F92F5 /* EditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorView.swift; sourceTree = "<group>"; };
+		846EAC7AAB98111535D876A7 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
+		EE48BF64EE8AEB082B5EA485 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		2229EDF85325CA5D6D2B38E9 /* AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTools.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C /* ModelAutoSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelAutoSelector.swift; sourceTree = "<group>"; };
+		E18191EA33C8E2AF2A17FCA2 /* PendingChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingChange.swift; sourceTree = "<group>"; };
+		7D005C06F5101A721F18521C /* ResponsesModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResponsesModels.swift; sourceTree = "<group>"; };
+		E37562F7AFDFE4A9689D3D3C /* SensitivePathPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitivePathPolicy.swift; sourceTree = "<group>"; };
+		3ECBBF04775C658A626AE3BE /* TextDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextDiff.swift; sourceTree = "<group>"; };
+		39472911CB7B790299C458CC /* WorkspacePathGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePathGuard.swift; sourceTree = "<group>"; };
+		03BFA2D58A3BA660C040E7BA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2AD37BA119D826F7F0D86F08 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		3D42DE5DEC713AA055793100 /* CodexPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodexPad.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7805F7FC904F49F676E90BFE /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7FEFA489E25E19BEF8A8A2A9 /* Main Group */ = {
+			isa = PBXGroup;
+			children = (
+				183C0636153141BB45F848F7 /* CodexPad */,
+				3762C0F227309A1D7C77B711 /* CodexPadCore */,
+				5015CD1BF7713BE910007C79 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		183C0636153141BB45F848F7 /* CodexPad */ = {
+			isa = PBXGroup;
+			children = (
+				13DC383B5E32270AF16099DF /* App */,
+				72FA50B6D883C3B3675B96A2 /* Services */,
+				B2C017DA3EF835EFC4E7836B /* Views */,
+				1BE9CAB0E979617EE4A4C128 /* Resources */,
+			);
+			path = CodexPad;
+			sourceTree = "<group>";
+		};
+		13DC383B5E32270AF16099DF /* App */ = {
+			isa = PBXGroup;
+			children = (
+				65B0C298BCD69DAECADC0B65 /* CodexPadApp.swift */,
+				0C2A23D39B70D2D539B0B63F /* AppSettings.swift */,
+				7216B2734E9E047941D66BAC /* AppState.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		72FA50B6D883C3B3675B96A2 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				0DCA6D605F08FAAC18BC6878 /* KeychainStore.swift */,
+				63E2FF55F3BDEB5B962A0B82 /* WorkspaceFileService.swift */,
+				05049490B8B28051EF87CB4E /* WorkspaceStore.swift */,
+				1CA50429BDE0A2DAD3FB4815 /* OpenAIResponsesClient.swift */,
+				74A420420849A56EBEE01415 /* AgentController.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		B2C017DA3EF835EFC4E7836B /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A34C99C1BCF5A994D5943B4D /* RootView.swift */,
+				113502B764D4B389A140793E /* FileSidebarView.swift */,
+				4A6D12083E9C1930607F92F5 /* EditorView.swift */,
+				846EAC7AAB98111535D876A7 /* AgentView.swift */,
+				EE48BF64EE8AEB082B5EA485 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		1BE9CAB0E979617EE4A4C128 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				03BFA2D58A3BA660C040E7BA /* Assets.xcassets */,
+				2AD37BA119D826F7F0D86F08 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		3762C0F227309A1D7C77B711 /* CodexPadCore */ = {
+			isa = PBXGroup;
+			children = (
+				2229EDF85325CA5D6D2B38E9 /* AgentTools.swift */,
+				A1B2C3D4E5F60718293A4B5C /* ModelAutoSelector.swift */,
+				E18191EA33C8E2AF2A17FCA2 /* PendingChange.swift */,
+				7D005C06F5101A721F18521C /* ResponsesModels.swift */,
+				E37562F7AFDFE4A9689D3D3C /* SensitivePathPolicy.swift */,
+				3ECBBF04775C658A626AE3BE /* TextDiff.swift */,
+				39472911CB7B790299C458CC /* WorkspacePathGuard.swift */,
+			);
+			path = Sources/CodexPadCore;
+			sourceTree = "<group>";
+		};
+		5015CD1BF7713BE910007C79 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				3D42DE5DEC713AA055793100 /* CodexPad.app */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0E8A3AD980EC179856012B7E /* CodexPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FF1EB33CB90090982057DE00 /* Build configuration list for PBXNativeTarget "CodexPad" */;
+			buildPhases = (1CE6DC2571680BAD24FA2D71 /* Sources */, 7805F7FC904F49F676E90BFE /* Frameworks */, 7C9581047372A5681A4931A9 /* Resources */);
+			buildRules = (); dependencies = (); name = CodexPad;
+			productName = CodexPad; productReference = 3D42DE5DEC713AA055793100 /* CodexPad.app */; productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = { BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2600; LastUpgradeCheck = 2600; TargetAttributes = {
+				0E8A3AD980EC179856012B7E = { CreatedOnToolsVersion = 26.0; };
+			}; };
+			buildConfigurationList = AE9DBEB92A3A454136EF894A /* Build configuration list for PBXProject "CodexPad" */;
+			compatibilityVersion = "Xcode 16.0"; developmentRegion = zh_CN; hasScannedForEncodings = 0; knownRegions = ("zh-Hans", Base);
+			mainGroup = 7FEFA489E25E19BEF8A8A2A9; productRefGroup = 5015CD1BF7713BE910007C79 /* Products */; projectDirPath = ""; projectRoot = "";
+			targets = (0E8A3AD980EC179856012B7E /* CodexPad */);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7C9581047372A5681A4931A9 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (8D63F56C1A04DEFA45983528 /* Assets.xcassets in Resources */); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1CE6DC2571680BAD24FA2D71 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+			5F4AFDB1F57EBED596D0EC74 /* CodexPadApp.swift in Sources */,
+			9ED945E8C366A6677A450594 /* AppSettings.swift in Sources */,
+			AC78336EC8D3BA65B828E2E0 /* AppState.swift in Sources */,
+			A7C68B071C15495C40C747A9 /* KeychainStore.swift in Sources */,
+			AE7C3FE34C887189ADFA97A3 /* WorkspaceFileService.swift in Sources */,
+			BDD188D3F4E8046EF79A6539 /* WorkspaceStore.swift in Sources */,
+			EFFD8ED07C1DE3186E926797 /* OpenAIResponsesClient.swift in Sources */,
+			99B80E5F770DD35388DCEBE7 /* AgentController.swift in Sources */,
+			4183EC7367DDAF3ABBF9F02E /* RootView.swift in Sources */,
+			5E4E03ADB636115B4A29D64C /* FileSidebarView.swift in Sources */,
+			2B3223F08EC0166AA0757DE3 /* EditorView.swift in Sources */,
+			13DA814AF4A1414E41049C35 /* AgentView.swift in Sources */,
+			DFC5EFC0D800879CC80BCE47 /* SettingsView.swift in Sources */,
+			DED57E3A1C9E12972041B783 /* AgentTools.swift in Sources */,
+			F0A1B2C3D4E5F60718293A4B /* ModelAutoSelector.swift in Sources */,
+			DAB25CCE9267876EEC2F74E7 /* PendingChange.swift in Sources */,
+			61195BBB083F4CAAAFC7DA00 /* ResponsesModels.swift in Sources */,
+			B55DC60F00F86792BDD91928 /* SensitivePathPolicy.swift in Sources */,
+			A884C413639B428B361D7EF1 /* TextDiff.swift in Sources */,
+			461F8FDF7FB93B9A5DCB09E2 /* WorkspacePathGuard.swift in Sources */,
+		); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A3726B02B7B14ACAA02A9797 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		8B19A7CE913C88F396775294 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; ENABLE_NS_ASSERTIONS = NO; GCC_C_LANGUAGE_STANDARD = gnu17; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		48BBFFD881E4E1EFBD2D18CF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CodexPad/Resources/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.CodexPad; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 2; SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		7320814380A01830A6B16D6A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_ACCENT_COLOR_NAME = AccentColor; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_PREVIEWS = YES; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = CodexPad/Resources/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 18.0; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.CodexPad; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 2; SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AE9DBEB92A3A454136EF894A /* Build configuration list for PBXProject "CodexPad" */ = {isa = XCConfigurationList; buildConfigurations = (A3726B02B7B14ACAA02A9797 /* Debug */, 8B19A7CE913C88F396775294 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		FF1EB33CB90090982057DE00 /* Build configuration list for PBXNativeTarget "CodexPad" */ = {isa = XCConfigurationList; buildConfigurations = (48BBFFD881E4E1EFBD2D18CF /* Debug */, 7320814380A01830A6B16D6A /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}

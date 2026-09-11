@@ -86,6 +86,10 @@ jobs:
           echo "Using project: $FILE" | tee "$LOG_DIR/xcodebuild-target.txt" | tee -a "$GITHUB_WORKSPACE/logs/build-summary.txt"
           test -n "$FILE"
 
+          if [ -f "$(dirname "$FILE")/Package.swift" ]; then
+            swift test --package-path "$(dirname "$FILE")" 2>&1 | tee "$LOG_DIR/core-tests.log"
+          fi
+
           # Save the pbxproj itself because malformed/missing file references often explain CI-only failures.
           if [ -f "$FILE/project.pbxproj" ]; then
             cp "$FILE/project.pbxproj" "$LOG_DIR/project.pbxproj.txt"
