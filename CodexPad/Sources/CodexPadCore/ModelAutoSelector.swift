@@ -66,12 +66,13 @@ public enum ModelAutoSelector {
         let lower = id.lowercased()
         let blocked = [
             "embedding", "image", "audio", "realtime", "transcrib", "whisper",
-            "tts", "moderation", "search", "computer-use", "video", "sora", "instruct", "cyber"
+            "tts", "moderation", "search", "computer-use", "video", "sora", "instruct", "cyber",
+            "dall-e", "babbage", "davinci"
         ]
         if blocked.contains(where: lower.contains) { return false }
-        return lower.hasPrefix("gpt-") ||
-            lower.range(of: #"^o[0-9]"#, options: .regularExpression) != nil ||
-            ["codex", "coder", "chat", "claude", "deepseek", "qwen", "gemini", "llama", "mistral", "reasoner"].contains(where: lower.contains)
+        // Unknown provider IDs remain candidates at the lowest rank. The real
+        // function-call probe, not a naming convention, decides usability.
+        return !lower.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func parsedVersion(_ id: String) -> (major: Int, minor: Int) {

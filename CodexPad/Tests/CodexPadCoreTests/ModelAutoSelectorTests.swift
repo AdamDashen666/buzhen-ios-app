@@ -31,4 +31,13 @@ final class ModelAutoSelectorTests: XCTestCase {
         XCTAssertTrue(ModelAutoSelector.supportsReasoning("o4-mini"))
         XCTAssertFalse(ModelAutoSelector.supportsReasoning("gpt-4o"))
     }
+
+    func testUnknownProviderModelCanBeProbed() {
+        XCTAssertEqual(ModelAutoSelector.bestModel(from: ["private-model-2026", "text-embedding-3-large"]), "private-model-2026")
+        XCTAssertEqual(ModelAutoSelector.bestModel(from: ["private-model", "my-coder-model"]), "my-coder-model")
+    }
+
+    func testNewerVersionIsNotHardcoded() {
+        XCTAssertEqual(ModelAutoSelector.bestModel(from: ["gpt-6-astra", "gpt-9.3-codex", "gpt-9.3-nano"]), "gpt-9.3-codex")
+    }
 }

@@ -20,9 +20,11 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .onSubmit { save() }
                         .accessibilityIdentifier("api-key")
+                        .disabled(saving || agent.isRunning)
                     TextField("API Base URL", text: $baseURL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("api-base-url")
+                        .disabled(saving || agent.isRunning)
                     Button("保存并连接", action: save)
                         .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving || agent.isRunning)
                     if saving || settings.isDetecting { ProgressView("正在验证连接…") }
@@ -51,6 +53,15 @@ struct SettingsView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .onAppear { baseURL = settings.baseURL }
             .onDisappear { apiKey = "" }
+            .task(id: apiKey) {
+                let candidate = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard candidate.count >= 12, !saving, !agent.isRunning,
+                      (try? OpenAIResponsesClient.normalizedBaseURL(baseURL)) != nil else { return }
+                do { try await Task.sleep(for: .milliseconds(900)) }
+                catch { return }
+                guard candidate == apiKey.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+                save()
+            }
             .confirmationDialog("移除已保存的 API Key？", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("移除", role: .destructive) {
                     do { try settings.removeKey(); agent.newChat(); status = ""; apiKey = "" }

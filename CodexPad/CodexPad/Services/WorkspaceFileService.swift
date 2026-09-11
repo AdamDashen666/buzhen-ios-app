@@ -93,7 +93,7 @@ struct WorkspaceFileService: Sendable {
 
     func prepare(kind: PendingChange.Kind, path: String, destination: String? = nil,
                  content: String? = nil, oldText: String? = nil) throws -> PendingChange {
-        try coordinate {
+        try coordinate(path: kind == .write ? path : nil) {
             try requireNonRoot(path)
             if let destination { try requireNonRoot(destination) }
             if let content, content.utf8.count > Self.maxTextBytes { throw WorkspaceFileError.tooLarge(path) }
@@ -372,11 +372,15 @@ struct WorkspaceFileService: Sendable {
         if let path {
             try withParent(path) { parent, leaf in
                 var info = stat()
-                guard fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw failure(path) }
-                guard info.st_mode & S_IFMT != S_IFLNK else { throw WorkspaceFileError.symlinkNotAllowed(path) }
+                let status = fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW)
+                if status != 0 && errno != ENOENT { throw failure(path) }
+                if status == 0 && info.st_mode & S_IFMT == S_IFLNK { throw WorkspaceFileError.symlinkNotAllowed(path) }
             }
             target = rootURL.appendingPathComponent(try WorkspacePathGuard.normalize(path))
         } else { target = rootURL }
+        if path != nil && FileManager.default.isUbiquitousItem(at: target) {
+            try FileManager.default.startDownloadingUbiquitousItem(at: target)
+        }
         var error: NSError?
         var result: Result<T, Error>?
         let coordinator = NSFileCoordinator()

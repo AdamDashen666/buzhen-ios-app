@@ -8,7 +8,7 @@ struct RootView: View {
     @EnvironmentObject private var agent: AgentController
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.scenePhase) private var scenePhase
-    @State private var pane = 1
+    @State private var pane = 0
     @State private var pendingNavigation: Navigation?
     @State private var showProtection = false
 
@@ -55,7 +55,7 @@ struct RootView: View {
             .ignoresSafeArea()
         }
         .sheet(isPresented: $app.showingSettings) { SettingsView() }
-        .confirmationDialog("继续前处理当前工作", isPresented: $showProtection, titleVisibility: .visible) {
+        .alert("继续前处理当前工作", isPresented: $showProtection) {
             if workspace.isDirty {
                 Button("保存并继续") {
                     guard let action = pendingNavigation else { return }

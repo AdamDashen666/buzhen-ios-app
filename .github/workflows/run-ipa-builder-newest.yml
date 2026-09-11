@@ -190,6 +190,8 @@ jobs:
           DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; ds=[d for a in json.load(sys.stdin)["devices"].values() for d in a if "iPad" in d["name"]]; print(ds[0]["udid"] if ds else "")')
           test -n "$DEVICE"
           echo "$DEVICE" > logs/ui-test-device.txt
+          xcrun simctl boot "$DEVICE" || true
+          xcrun simctl bootstatus "$DEVICE" -b
           set +e
           xcodebuild test \
             -project "$PROJECT" -scheme CodexPad \
@@ -212,6 +214,10 @@ jobs:
           set +e
           DIAG="$GITHUB_WORKSPACE/logs/postmortem"
           mkdir -p "$DIAG"
+          if [ -d "$GITHUB_WORKSPACE/logs/UITests.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$GITHUB_WORKSPACE/logs/UITests.xcresult" \
+              --output-path "$GITHUB_WORKSPACE/logs/screenshots" || true
+          fi
 
           {
             echo "=== GitHub Actions ==="
@@ -359,6 +365,15 @@ jobs:
             echo "xcresult bundles:"
             find "$GITHUB_WORKSPACE/logs" -maxdepth 4 -type d -name '*.xcresult' -print | sed "s#^$GITHUB_WORKSPACE/logs/##" | sort
           } > "$DIAG/diagnostics-index.txt" 2>&1
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UI-Screenshots-${{ github.run_number }}
+          path: "logs/screenshots/**"
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload IPA artifact
         if: success()

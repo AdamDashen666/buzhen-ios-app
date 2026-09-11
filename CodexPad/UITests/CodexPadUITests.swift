@@ -11,15 +11,15 @@ final class CodexPadUITests: XCTestCase {
     }
 
     private func screenshot(_ name: String, app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIDevice.shared.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
     }
 
     func testLandscapeEditorUnsavedProtectionAndSave() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = launch(["--ui-fixture"])
+        XCUIDevice.shared.orientation = .landscapeLeft
         let readme = app.buttons["README.md"].firstMatch
         XCTAssertTrue(readme.waitForExistence(timeout: 20))
         readme.tap()
@@ -38,10 +38,12 @@ final class CodexPadUITests: XCTestCase {
     }
 
     func testPortraitChineseSettingsAndDarkMode() throws {
-        XCUIDevice.shared.orientation = .portrait
         let app = launch(["--ui-fixture", "--ui-dark"])
-        XCTAssertTrue(app.tabBars.buttons["项目"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["项目"].tap()
+        XCUIDevice.shared.orientation = .portrait
+        screenshot("portrait-navigation", app: app)
+        let projects = app.buttons["项目"].firstMatch
+        XCTAssertTrue(projects.waitForExistence(timeout: 15))
+        projects.tap()
         app.buttons["项目菜单"].tap()
         app.buttons["设置"].tap()
         XCTAssertTrue(app.secureTextFields["api-key"].waitForExistence(timeout: 5))
@@ -50,20 +52,22 @@ final class CodexPadUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Settings"].exists)
         screenshot("portrait-settings-dark", app: app)
         app.buttons["完成"].tap()
-        app.tabBars.buttons["智能助手"].tap()
+        app.buttons["智能助手"].firstMatch.tap()
         screenshot("portrait-assistant-dark", app: app)
     }
 
     func testRealDocumentPickerOpensLocalFolder() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
         let app = launch(["--ui-picker"])
+        XCUIDevice.shared.orientation = .landscapeLeft
         let open = app.buttons["open-folder"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 15))
         open.tap()
         let cancel = app.buttons["取消"].firstMatch
         XCTAssertTrue(cancel.waitForExistence(timeout: 10))
         screenshot("document-picker", app: app)
-        let local = app.staticTexts["我的 iPad"].firstMatch
+        let local = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label MATCHES[c] %@", ".*(我的|On My).*iPad.*")
+        ).firstMatch
         if !local.waitForExistence(timeout: 5) {
             let browse = app.buttons["浏览"].firstMatch
             if browse.exists { browse.tap() }
@@ -73,13 +77,13 @@ final class CodexPadUITests: XCTestCase {
             throw XCTSkip("此模拟器未提供本地 Files 文档提供器；外部文件夹授权仍需真机验证。")
         }
         local.tap()
-        let container = app.staticTexts["CodexPad"].firstMatch
+        let container = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CodexPad")).firstMatch
         guard container.waitForExistence(timeout: 8) else {
             screenshot("document-provider-container-unavailable", app: app)
             throw XCTSkip("模拟器未注册 App 的文档容器，文件提供器验收需真机。")
         }
         container.tap()
-        let folder = app.staticTexts["示例项目"].firstMatch
+        let folder = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "示例项目")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 10))
         folder.tap()
         app.buttons["打开"].firstMatch.tap()
