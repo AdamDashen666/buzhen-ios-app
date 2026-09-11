@@ -11,7 +11,6 @@ struct RootView: View {
     @State private var pane = 0
     @State private var pendingNavigation: Navigation?
     @State private var showProtection = false
-    @State private var pickedFolder: URL?
     @State private var pickerID = UUID()
 
     private enum Navigation {
@@ -44,24 +43,8 @@ struct RootView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .preferredColorScheme(testColorScheme)
-        .sheet(isPresented: $app.showingFolderImporter, onDismiss: {
-            workspace.recordOpenEvent("文件选择器已关闭")
-            guard let url = pickedFolder else { return }
-            pickedFolder = nil
-            workspace.openFolder(url)
-        }) {
-            FolderPicker { result in
-                switch result {
-                case .success(let url):
-                    pickedFolder = url
-                    workspace.recordOpenEvent(url == nil ? "用户取消选择文件夹" : "收到系统文件夹选择回调")
-                    if url != nil { pane = 0 }
-                case .failure:
-                    workspace.recordOpenEvent("系统选择回调未包含文件夹")
-                    workspace.errorMessage = "系统未返回所选文件夹，请重新选择。"
-                }
-                app.showingFolderImporter = false
-            }
+        .sheet(isPresented: $app.showingFolderImporter) {
+            FolderPicker { handleFolderPickerResult($0) }
             .id(pickerID)
             .onAppear { workspace.recordOpenEvent("文件选择器已显示，等待系统返回选择结果") }
             .ignoresSafeArea()
@@ -169,7 +152,6 @@ struct RootView: View {
             }
         case .open:
             agent.newChat()
-            pickedFolder = nil
             pickerID = UUID()
             workspace.recordOpenEvent("请求打开文件选择器")
             app.showingFolderImporter = true
@@ -177,6 +159,25 @@ struct RootView: View {
             agent.newChat()
             workspace.closeFolder()
             pane = 0
+        }
+    }
+
+    private func handleFolderPickerResult(_ result: Result<URL?, Error>) {
+        switch result {
+        case .success(let url):
+            guard let url else {
+                workspace.recordOpenEvent("用户取消选择文件夹")
+                app.showingFolderImporter = false
+                return
+            }
+            pane = 0
+            workspace.recordOpenEvent("收到系统文件夹选择回调，立即开始打开")
+            workspace.openFolder(url)
+            app.showingFolderImporter = false
+        case .failure:
+            workspace.recordOpenEvent("系统选择回调未包含文件夹")
+            workspace.errorMessage = "系统未返回所选文件夹，请重新选择。"
+            app.showingFolderImporter = false
         }
     }
 }
@@ -196,21 +197,30 @@ struct FolderPicker: UIViewControllerRepresentable {
         context.coordinator.completion = completion
     }
 
-    @MainActor
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         var completion: @MainActor (Result<URL?, Error>) -> Void
         private var delivered = false
         init(completion: @escaping @MainActor (Result<URL?, Error>) -> Void) { self.completion = completion }
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+
+        private func deliver(_ result: Result<URL?, Error>) {
             guard !delivered else { return }
             delivered = true
-            guard let url = urls.first else { completion(.failure(WorkspaceFileError.noWorkspace)); return }
-            completion(.success(url))
+            let completion = completion
+            DispatchQueue.main.async {
+                completion(result)
+            }
         }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                deliver(.failure(WorkspaceFileError.noWorkspace))
+                return
+            }
+            deliver(.success(url))
+        }
+
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            guard !delivered else { return }
-            delivered = true
-            completion(.success(nil))
+            deliver(.success(nil))
         }
     }
 }
