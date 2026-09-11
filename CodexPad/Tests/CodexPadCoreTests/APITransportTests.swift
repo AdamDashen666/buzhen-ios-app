@@ -1,7 +1,7 @@
 import XCTest
 @testable import CodexPadCore
 
-private final class MockProtocol: URLProtocol, @unchecked Sendable {
+final class MockProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, String))?
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -15,6 +15,62 @@ private final class MockProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+@MainActor
+final class AgentControllerTests: XCTestCase {
+    func testBatchReviewAppliesOnlyAcceptedFilesAndRedactsKey() async throws {
+        let suite = "CodexPad.AgentTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let keychain = KeychainStore(service: suite)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? keychain.deleteAPIKey()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        MockProtocol.lock.withLock {
+            MockProtocol.handler = { request in
+                if request.url?.lastPathComponent == "models" { return (200, #"{"data":[{"id":"my-coder"}]}"#) }
+                return (200, #"{"id":"p","output":[{"type":"function_call","call_id":"p","name":"codexpad_probe","arguments":"{}"}]}"#)
+            }
+        }
+        let settings = AppSettings(defaults: defaults, keychain: keychain, clientFactory: { url, key in
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MockProtocol.self]
+            return OpenAIResponsesClient(baseURL: url, apiKey: key, session: URLSession(configuration: config))
+        })
+        try await settings.save(key: "fixture-secret-key", base: "https://example.invalid")
+        let workspace = WorkspaceStore(defaults: defaults)
+        workspace.openFolder(root)
+        await workspace.waitForOpening()
+        let agent = AgentController(workspace: workspace, settings: settings, keychain: keychain)
+        MockProtocol.lock.withLock {
+            MockProtocol.handler = { _ in
+                (200, #"{"id":"r","output":[{"type":"function_call","call_id":"a","name":"create_file","arguments":"{\"path\":\"a.txt\",\"content\":\"first\"}"},{"type":"function_call","call_id":"b","name":"create_file","arguments":"{\"path\":\"b.txt\",\"content\":\"second\"}"}]}"#)
+            }
+        }
+        XCTAssertTrue(agent.send("创建文件 fixture-secret-key"))
+        await agent.waitUntilIdle()
+        XCTAssertEqual(agent.pendingChanges.count, 2)
+        XCTAssertFalse(agent.messages.contains { $0.text.contains("fixture-secret-key") })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        let first = try XCTUnwrap(agent.pendingChanges.first)
+        agent.review(ids: [first.id], accept: true)
+        await agent.waitUntilIdle()
+        XCTAssertEqual(agent.pendingChanges.count, 1)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "first")
+        MockProtocol.lock.withLock {
+            MockProtocol.handler = { _ in (200, #"{"id":"done","output":[{"type":"message","content":[{"type":"output_text","text":"已完成"}]}]}"#) }
+        }
+        agent.review(ids: Set(agent.pendingChanges.map(\.id)), accept: false)
+        await agent.waitUntilIdle()
+        XCTAssertTrue(agent.pendingChanges.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("b.txt").path))
+        XCTAssertNil(agent.errorMessage)
+        workspace.closeFolder()
+    }
 }
 
 final class APITransportTests: XCTestCase, @unchecked Sendable {

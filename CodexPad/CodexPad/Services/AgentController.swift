@@ -37,15 +37,18 @@ final class AgentController: ObservableObject {
     private var outputBytes = 0
     private var lastPrompt: String?
     private var canRetry = false
+    private let keychain: KeychainStore
 
-    init(workspace: WorkspaceStore, settings: AppSettings) {
+    init(workspace: WorkspaceStore, settings: AppSettings, keychain: KeychainStore = KeychainStore()) {
         self.workspace = workspace
         self.settings = settings
+        self.keychain = keychain
     }
 
     var hasConversation: Bool { !messages.isEmpty || !pendingChanges.isEmpty }
     var canSend: Bool { !isRunning && pendingChanges.isEmpty && workspace.session != nil && !workspace.isOpening }
     var retryAvailable: Bool { canRetry && canSend }
+    func waitUntilIdle() async { await runningTask?.value }
 
     @discardableResult
     func send(_ prompt: String) -> Bool {
@@ -96,7 +99,7 @@ final class AgentController: ObservableObject {
         guard !isRunning, !ids.isEmpty else { return }
         let selected = pendingChanges.filter { ids.contains($0.id) }
         guard !selected.isEmpty else { return }
-        launch {
+        launch(preserveReviewOnFailure: true) {
             for pending in selected {
                 try Task.checkCancellation()
                 try self.checkBinding()
@@ -117,7 +120,7 @@ final class AgentController: ObservableObject {
         }
     }
 
-    private func launch(_ operation: @escaping @MainActor () async throws -> Void) {
+    private func launch(preserveReviewOnFailure: Bool = false, _ operation: @escaping @MainActor () async throws -> Void) {
         isRunning = true
         isStopping = false
         errorMessage = nil
@@ -132,8 +135,10 @@ final class AgentController: ObservableObject {
             }
             do { try await operation() }
             catch is CancellationError {
-                self.messages.append(ChatMessage(role: .system, text: "已停止。已应用的修改会保留。"))
-                if self.pendingChanges.isEmpty { self.history = []; self.waitingOutputs = [] }
+                self.messages.append(ChatMessage(role: .system, text: "已停止。已应用的修改会保留，未处理提议已丢弃。"))
+                self.pendingChanges = []
+                self.history = []
+                self.waitingOutputs = []
             } catch {
                 if let api = error as? OpenAIResponsesClient.APIError {
                     self.errorMessage = api.localizedDescription
@@ -141,7 +146,8 @@ final class AgentController: ObservableObject {
                 } else if error is AppSettings.SettingsError || error is AgentError {
                     self.errorMessage = error.localizedDescription
                 } else { self.errorMessage = WorkspaceStore.describe(error) }
-                if self.pendingChanges.isEmpty {
+                if self.pendingChanges.isEmpty || !preserveReviewOnFailure {
+                    self.pendingChanges = []
                     self.history = []
                     self.waitingOutputs = []
                     self.canRetry = true
@@ -310,7 +316,7 @@ final class AgentController: ObservableObject {
     }
 
     private func redact(_ text: String) -> String {
-        guard let key = try? KeychainStore().loadAPIKey(), !key.isEmpty else { return text }
+        guard let key = try? keychain.loadAPIKey(), !key.isEmpty else { return text }
         return text.replacingOccurrences(of: key, with: "[密钥已隐藏]")
     }
 
@@ -334,7 +340,7 @@ final class AgentController: ObservableObject {
         先搜索和分页读取相关文件，不要读取整个项目。修改前检查文件内容，优先使用唯一原文替换。
         所有写操作生成待审修改，只有工具返回“已应用”才能声称成功。用户拒绝后不要绕过审批。
         同一批调用不要修改相同路径或其父子路径。父目录必须存在，请先创建目录并等成功后再创建文件。
-        非空目录不能直接删除或移动。工具失败时根据中文错误调整操作，不要重复同一失败调用。
+        非空目录不能直接删除。工具失败时根据中文错误调整操作，不要重复同一失败调用。
         iPadOS 不提供 Shell、git、npm、xcodebuild 或任意进程执行。不要声称已经运行测试或编译。
         默认用简体中文与用户交流，最终说明实际完成的文件修改和未验证内容。
         """

@@ -72,6 +72,7 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var isLoadingTree = false
     @Published private(set) var isLoadingFile = false
     @Published private(set) var isSavingFile = false
+    @Published private(set) var isApplyingFile = false
     @Published private(set) var needsAuthorization = false
     @Published var errorMessage: String?
     @Published var fileNotice: String?
@@ -90,7 +91,7 @@ final class WorkspaceStore: ObservableObject {
     var rootURL: URL? { session?.url }
     var isDirty: Bool { selectedPath != nil && editorText != savedEditorText }
     var displayName: String { rootURL?.lastPathComponent ?? "项目" }
-    var isBusy: Bool { isOpening || isLoadingFile || isSavingFile }
+    var isBusy: Bool { isOpening || isLoadingFile || isSavingFile || isApplyingFile }
 
     func restoreRecentProject() {
         guard !didRestore else { return }
@@ -109,7 +110,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func openFolder(_ url: URL) {
-        guard !isDirty, !isSavingFile else {
+        guard !isDirty, !isSavingFile, !isApplyingFile else {
             errorMessage = "当前文件尚未保存，请先保存或放弃修改。"
             return
         }
@@ -131,7 +132,7 @@ final class WorkspaceStore: ObservableObject {
     func waitForOpening() async { await openTask?.value }
 
     func closeFolder() {
-        guard !isDirty, !isSavingFile else { errorMessage = "请先保存或放弃当前修改。"; return }
+        guard !isDirty, !isSavingFile, !isApplyingFile else { errorMessage = "请先保存或等待当前文件操作完成。"; return }
         cancelOpening()
         session = nil
         entries = []
@@ -177,7 +178,7 @@ final class WorkspaceStore: ObservableObject {
 
     func openFile(_ path: String, discardUnsaved: Bool = false, line: Int = 1) async throws {
         if isDirty && !discardUnsaved { throw EditorError.unsavedChanges }
-        guard !isSavingFile, !isOpening, let current = session else { throw WorkspaceFileError.noWorkspace }
+        guard !isSavingFile, !isOpening, !isApplyingFile, let current = session else { throw WorkspaceFileError.noWorkspace }
         let generation = UUID()
         fileGeneration = generation
         isLoadingFile = true
@@ -194,7 +195,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func saveEditor() async throws {
-        guard !isSavingFile, !isLoadingFile, !isOpening else { throw EditorError.busy }
+        guard !isSavingFile, !isLoadingFile, !isOpening, !isApplyingFile else { throw EditorError.busy }
         guard let path = selectedPath, let current = session, let baseline = savedRevision else { return }
         let text = editorText
         isSavingFile = true
@@ -235,12 +236,20 @@ final class WorkspaceStore: ObservableObject {
 
     func apply(_ change: PendingChange, in expectedSession: UUID) async throws {
         guard let current = session, current.id == expectedSession, !isOpening else { throw WorkspaceFileError.changed }
-        if selectedPath == change.path && (isDirty || isSavingFile || isLoadingFile) { throw EditorError.unsavedChanges }
+        guard !isApplyingFile else { throw EditorError.busy }
+        let affectsEditor = selectedPath.map { $0 == change.path || $0.hasPrefix(change.path + "/") } ?? false
+        if affectsEditor && (isDirty || isSavingFile || isLoadingFile) { throw EditorError.unsavedChanges }
+        isApplyingFile = true
+        defer { isApplyingFile = false }
         try await current.perform { try $0.apply(change) }
         guard session?.id == current.id else { return }
         if selectedPath == change.path {
             if change.kind == .delete { clearEditor() }
             else if change.kind == .move { selectedPath = change.destinationPath }
+        }
+        else if change.kind == .move, let path = selectedPath, path.hasPrefix(change.path + "/"),
+                let destination = change.destinationPath {
+            selectedPath = destination + path.dropFirst(change.path.count)
         }
         await refreshTree()
         await refreshSelectedFileIfUnmodified()

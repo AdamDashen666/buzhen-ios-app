@@ -22,7 +22,7 @@ struct EditorView: View {
                 Divider()
                 CodeTextView(text: $workspace.editorText, findRequest: findRequest,
                              documentID: path, line: workspace.editorLine)
-                    .disabled(workspace.isLoadingFile || workspace.isOpening)
+                    .disabled(workspace.isLoadingFile || workspace.isOpening || workspace.isApplyingFile)
                     .accessibilityIdentifier("code-editor")
                 Divider()
                 HStack {

@@ -107,4 +107,36 @@ final class WorkspaceFileServiceTests: XCTestCase {
             XCTAssertThrowsError(try service.prepare(kind: .delete, path: "folder"))
         }
     }
+
+    func testDirectoryMoveTracksDescendantChanges() throws {
+        try fixture { root, service in
+            try service.apply(service.prepare(kind: .createDirectory, path: "folder"))
+            try service.apply(service.prepare(kind: .create, path: "folder/a", content: "old"))
+            let change = try service.prepare(kind: .move, path: "folder", destination: "new")
+            try Data("external".utf8).write(to: root.appendingPathComponent("folder/a"))
+            XCTAssertThrowsError(try service.apply(change))
+            try service.apply(service.prepare(kind: .move, path: "folder", destination: "new"))
+            XCTAssertEqual(try service.readSnapshot(path: "new/a").text, "external")
+        }
+    }
+
+    func testCancelledOperationDoesNotModifyFile() throws {
+        try fixture { _, service in
+            let change = try service.prepare(kind: .create, path: "a", content: "new")
+            let control = FileOperationControl()
+            control.cancel()
+            XCTAssertThrowsError(try service.controlled(by: control).apply(change))
+            XCTAssertTrue(try service.listDirectory(path: "").isEmpty)
+        }
+    }
+
+    func testRepeatedListingDoesNotShareDirectoryCursor() throws {
+        try fixture { _, service in
+            try service.apply(service.prepare(kind: .create, path: "a", content: "text"))
+            XCTAssertEqual(try service.listDirectory(path: "").map(\.name), ["a"])
+            XCTAssertEqual(try service.listDirectory(path: "").map(\.name), ["a"])
+            try service.apply(service.prepare(kind: .create, path: "b", content: "text"))
+            XCTAssertEqual(try service.listDirectory(path: "").map(\.name), ["a", "b"])
+        }
+    }
 }

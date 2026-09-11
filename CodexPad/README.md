@@ -1,48 +1,87 @@
-# CodexPad — iPad 版本地代码 Agent
+# CodexPad 3
 
-CodexPad 是一个原生 iPadOS SwiftUI 工程：用户先通过 **Files 文件夹选择器**授权一个项目目录，AI Agent 才能读取/修改该目录里的文件。
+原生 iPadOS 18+ 编程工作区：项目文件、代码编辑器、智能助手与修改审查。
+支持横竖屏、窄窗口、浅色与深色模式。无需第三方 UI 或 Agent 依赖。
+
+## 使用
+
+1. 打开项目文件夹，在系统文件选择器中授权目录。
+2. 设置中填写 API Key 和 HTTPS API Base URL，点击「保存并连接」或提交键盘输入。
+3. 自动读取模型列表并验证 Responses 工具调用能力，无需选择模型。
+4. 描述编程任务，审查 Diff，再逐项或全部接受、拒绝。
+
+API Key 只存放在 Keychain。设置页不显示原始 Key，也不向模型发送 Key。
+默认屏蔽 `.env`、私钥、证书、`.git`、`.ssh` 等敏感路径。
+项目文件内容会按工具请求发送至用户配置的 API 服务，不会一次性上传整个项目。
 
 ## 已实现
 
-- 三栏界面：**项目文件树 / 代码编辑器 / Agent Chat**
-- 文件夹授权与 security-scoped bookmark 持久化
-- UTF-8 文件读取、编辑、保存、恢复；`⌘S` 保存
-- Agent 工具：`list_directory`、`read_file`、`search_text`、`write_file`、`create_file`、`delete_file`、`move_file`
-- 默认修改前显示 Diff，可 **Apply / Reject**；可在设置中启用 Auto Apply
-- API Key 存 iOS Keychain，不写入工程和 UserDefaults
-- API Base URL、模型、Reasoning 可修改；默认 `https://api.openai.com/v1` + `gpt-6-astra` + `high`
-- 默认禁止 Agent 读取 `.env`、`.p8`、`.p12`、SSH 私钥、`.git` 等常见敏感文件
-- 阻止绝对路径、`..` 越界和符号链接路径
-- 新建文件不会覆盖同名现有文件；删除非空目录会拒绝
-- 自带 App 图标与 Accent Color，无第三方依赖
+- `UIDocumentPickerViewController(.folder, asCopy: false)`，选择回调立即进入加载状态。
+- 会话持有 security scope；书签解析、生成、目录枚举与文件 I/O 不运行在主线程。
+- 只扫描当前目录，展开时才读取子目录，避免被大型依赖树阻塞。
+- 最近项目书签恢复，失效时显示中文错误及重新授权入口。
+- 文件协调、操作取消、提供器等待超时、中文错误反馈。
+- 文件读取及写入使用固定根目录描述符和 `openat/O_NOFOLLOW` 逐层约束路径。
+- 创建拒绝同名覆盖；原子写入；保存、删除、移动前校验文件版本。
+- UTF-8 编辑、未保存提示、切换文件及项目保护、Cmd+S、Cmd+F、原生查找替换。
+- 文件及内容搜索；新建文件/目录、移动、重命名、删除上下文菜单。
+- 十项工具：`list_directory`、`read_file`、`search_files`、`create_file`、
+  `write_file`、`replace_text`、`move_file`、`rename_file`、`delete_file`、`create_directory`。
+- 多工具调用完整处理，每项调用都有结果；支持批量审查和部分失败后的继续处理。
+- 同批路径重叠拦截，外部修改冲突保护，编辑器与 Agent 写操作互斥。
+- 无服务端对话存储的 Responses 请求，保留不透明推理项和全部工具输出。
+- 最多 24 轮/80 次调用，分页读取、输出与上下文大小上限。
+- 前后台切换、取消请求、项目/配置绑定，避免跨项目执行旧任务。
+- 完整 iPad App Icon 和中文系统区域声明。
 
-## 在 Mac/Xcode 运行
+## 自动模型
 
-1. 解压并打开 `CodexPad.xcodeproj`。
-2. 在 **CodexPad Target → Signing & Capabilities** 选择你的 Apple Development Team。
-3. 如有需要，把 Bundle ID `com.example.CodexPad` 改成你自己的。
-4. 选择 iPadOS 18+ 真机或模拟器，Run。
-5. App 内进入 **Settings** 保存 API Key，然后点 **Open Folder** 选择项目目录。
+模型列表来自实际 API 返回，不固定常规模型。按名称中的模型家族、版本、规模和编程特征排序，
+再用无文件内容的小型 Responses function-call 探测验证候选。
+列表不代表模型实际可调用，因此只缓存成功通过探测的模型。
+缓存与 API 地址和 Key 的 SHA-256 指纹绑定，24 小时后自动重新检测。
 
-## Core 测试
+当模型列表不可用，先尝试同一凭据的已验证缓存；OpenAI 可尝试发布时的引导别名，
+其他网关尝试 `auto`、`default`。每个 fallback 必须通过真实工具调用验证才会保存。
+401、429、服务端故障和网络故障不会被伪装成检测成功。
+若网关既不提供模型列表，也不支持缓存或自动别名，客户端无法凭空推导其私有模型 ID，
+会显示中文错误；本地文件编辑不受影响。
 
-项目根目录执行：
+## 构建与测试
 
-```bash
+在 macOS 上：
+
+```sh
 swift test
+xcodebuild clean build -project CodexPad.xcodeproj -scheme CodexPad \
+  -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=''
+xcodebuild test -project CodexPad.xcodeproj -scheme CodexPad \
+  -destination 'platform=iOS Simulator,name=<已安装的 iPad 模拟器>' \
+  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
 ```
 
-当前 Core 测试覆盖路径安全、敏感文件策略、Diff、严格 Tool Schema、Responses API 解析、Pending Change。
+单元和集成测试包括真实临时文件操作、中文路径、路径穿越、符号链接、
+外部文件冲突、重复名称、二进制/大文件、搜索过滤、重复刷新、取消、
+书签恢复、未保存保护、API 错误、JSON 协议、自动 fallback、凭据缓存隔离与批量审查。
+UI 测试包括横屏编辑、未保存确认、中文设置、竖屏深色模式与系统文件选择器。
+模拟器如果没有 Files 文档提供器，相关用例明确标记跳过，不冒充真机验证。
 
-## iPadOS 本身的限制
+仓库工作流 `.github/workflows/run-ipa-builder-newest.yml` 从根目录源码 ZIP 构建。
+按顺序运行核心测试、Release unsigned IPA 构建、iPad UI 测试，再上传 IPA 和完整诊断。
+ZIP 使用 `git archive` 生成，路径采用 POSIX 分隔符。
 
-这不是 iPad 上的完整桌面终端。iPadOS 不允许 App 随意遍历整个文件系统，也不给普通 App 一个任意命令执行环境。因此本版**不能本地运行** `git`、`xcodebuild`、npm/pip、shell 脚本或其他任意进程；它的核心能力是对用户授权项目目录进行 AI 辅助读取和编辑。
+## 真实边界
 
-如果以后需要“像桌面 Codex 一样改完直接编译/测试”，下一版适合增加 **远程 Mac/CI Runner**：iPad 负责编辑和 Agent，Mac 负责 shell、build、test、git。
+- unsigned IPA 没有 Apple 签名，需要自行签名才能在正常 iPad 上安装。
+- 没有本地 Shell、Git、npm、pip、xcodebuild 或任意命令执行；编译需远端 Mac/CI。
+- 编辑器仅支持 UTF-8、2 MB 以内文本。大型文件仍可移动/删除，但不进入文本上下文。
+- 单目录最多 5000 项，搜索最多 5000 项/100 个结果/15 秒；达到上限明确提示。
+- 非空目录删除被禁止，目录移动最多检查 5000 项和 64 层。
+- 所有符号链接均不读取。文件路径逃逸被拒绝，路径内的冒号和反斜线不接受。
+- 文件协调能与合规的文档提供器协作，但不能承诺对不参与协调的第三方写入做跨进程事务。
+- iCloud 下载、权限撤回与第三方文件提供器必须在实际设备和对应账号下进一步验收。
+- 对话和未接受提议仅保留在当前进程；进入后台会停止运行中的助手，已落盘文件保留。
+- 不内置真实 API Key；自动化网络测试使用 mock，不等同于用户账户的真实额度/模型验收。
 
-## 安全说明
-
-- API Key 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` 存入 Keychain。
-- Base URL 必须是 HTTPS。
-- Auto Apply 会减少人工确认，开启前建议项目本身处于 Git/备份中。
-- 如果要公开分发 App，建议把长期 API Key 改成后端签发的短期凭证。
+更详细的根因与验证证据见 `docs/REPAIR-REPORT.md`。

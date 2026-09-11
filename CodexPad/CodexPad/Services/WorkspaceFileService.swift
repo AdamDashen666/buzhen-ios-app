@@ -46,7 +46,7 @@ enum WorkspaceFileError: LocalizedError {
         case .symlinkNotAllowed(let path): return "已阻止符号链接访问：\(path)"
         case .notFound(let path): return "找不到文件或目录：\(path)"
         case .alreadyExists(let path): return "目标已经存在，不会覆盖：\(path)"
-        case .directoryNotEmpty(let path): return "只能删除或移动空目录；请逐个处理其中的文件：\(path)"
+        case .directoryNotEmpty(let path): return "不允许递归删除非空目录，请逐项审查其中的文件：\(path)"
         case .io(let path, let code):
             if code == EACCES || code == EPERM { return "没有访问权限：\(path)。请重新选择项目文件夹授权。" }
             if code == ENOENT { return "找不到路径：\(path)。如来自 iCloud，请确认文件已同步。" }
@@ -118,7 +118,7 @@ struct WorkspaceFileService: Sendable {
                                      proposedText: proposed, baseline: digest(data))
             }
             if let destination { try requireMissing(destination) }
-            let revision = try itemRevision(path)
+            let revision = try itemRevision(path, includeChildren: kind == .move)
             let old = try? readData(path: path)
             return PendingChange(kind: kind, path: path, destinationPath: destination,
                                  originalText: old.flatMap { String(data: $0, encoding: .utf8) },
@@ -144,7 +144,7 @@ struct WorkspaceFileService: Sendable {
                     guard mkdirat(parent, leaf, 0o755) == 0 else { throw failure(change.path) }
                 }
             case .delete, .move:
-                guard let baseline = change.baseline, try itemRevision(change.path) == baseline else {
+                guard let baseline = change.baseline, try itemRevision(change.path, includeChildren: change.kind == .move) == baseline else {
                     throw WorkspaceFileError.changed
                 }
                 try withParent(change.path) { parent, leaf in
@@ -297,16 +297,33 @@ struct WorkspaceFileService: Sendable {
         }
     }
 
-    private func itemRevision(_ path: String) throws -> String {
-        try withParent(path) { parent, leaf in
+    private func itemRevision(_ path: String, includeChildren: Bool) throws -> String {
+        var remaining = 5000
+        return try revision(path, includeChildren: includeChildren, remaining: &remaining, depth: 0)
+    }
+
+    private func revision(_ path: String, includeChildren: Bool, remaining: inout Int, depth: Int) throws -> String {
+        remaining -= 1
+        guard remaining >= 0, depth <= 64 else { throw WorkspaceFileError.tooManyEntries }
+        try Task.checkCancellation()
+        return try withParent(path) { parent, leaf in
             var info = stat()
             guard fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw failure(path) }
+            let metadata = "\(info.st_dev):\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec):\(info.st_ctimespec.tv_sec):\(info.st_ctimespec.tv_nsec)"
             if info.st_mode & S_IFMT == S_IFLNK { throw WorkspaceFileError.symlinkNotAllowed(path) }
             if info.st_mode & S_IFMT == S_IFDIR {
-                guard try listUncoordinated(path).isEmpty else { throw WorkspaceFileError.directoryNotEmpty(path) }
-                return "directory:\(info.st_ino):\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec)"
+                let entries = try listUncoordinated(path)
+                if !includeChildren && !entries.isEmpty { throw WorkspaceFileError.directoryNotEmpty(path) }
+                var parts = [metadata]
+                for entry in entries {
+                    parts.append(entry.path)
+                    parts.append(try revision(entry.path, includeChildren: true, remaining: &remaining, depth: depth + 1))
+                }
+                return digest(Data(parts.joined(separator: "\n").utf8))
             }
-            return try digest(readData(path: path))
+            guard info.st_mode & S_IFMT == S_IFREG else { throw WorkspaceFileError.binaryOrInvalidUTF8(path) }
+            if info.st_size > Self.maxTextBytes { return metadata }
+            return try metadata + ":" + digest(readData(path: path))
         }
     }
 
@@ -324,7 +341,7 @@ struct WorkspaceFileService: Sendable {
 
     private func openDirectory(_ path: String) throws -> Int32 {
         let normalized = try WorkspacePathGuard.normalize(path)
-        var fd = dup(rootHandle.fd)
+        var fd = openat(rootHandle.fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw failure(path) }
         for component in normalized.split(separator: "/") {
             let next = openat(fd, String(component), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -385,7 +402,7 @@ struct WorkspaceFileService: Sendable {
         } else {
             coordinator.coordinate(readingItemAt: target, options: [], error: &error, byAccessor: accessor)
         }
-        try cancellation?.check()
+        if result == nil { try cancellation?.check() }
         if let error { throw error }
         guard let result else { throw WorkspaceFileError.cancelled }
         return try result.get()

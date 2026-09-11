@@ -136,7 +136,7 @@ struct RootView: View {
     }
 
     private func request(_ action: Navigation) {
-        guard !workspace.isSavingFile else { return }
+        guard !workspace.isSavingFile, !workspace.isApplyingFile else { return }
         if action.changesProject && agent.isRunning {
             workspace.errorMessage = "请先停止智能助手，再切换项目。"
             return
