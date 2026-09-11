@@ -11,11 +11,12 @@ enum FileIOExecutor {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 completion.install(continuation)
-                let deadline = DispatchWorkItem {
+                let deadline = Task.detached {
+                    do { try await Task.sleep(for: .seconds(timeout)) }
+                    catch { return }
                     completion.finish(.failure(WorkspaceFileError.timedOut))
                     control.cancel(timeout: true)
                 }
-                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: deadline)
                 queue.async {
                     defer { deadline.cancel() }
                     let result = Result {
@@ -43,7 +44,7 @@ private final class FileIOCompletion<T: Sendable>: @unchecked Sendable {
     private var finished = false
 
     func install(_ continuation: CheckedContinuation<T, Error>) {
-        let completed = lock.withLock {
+        let completed: Result<T, Error>? = lock.withLock {
             if let result {
                 self.result = nil
                 return result
