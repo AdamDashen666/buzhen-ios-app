@@ -1,0 +1,101 @@
+name: Build CodexPad v2 CN
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "codexpad_payload/**"
+      - ".github/workflows/build-codexpad-v2.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build CodexPad v2 CN
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          PICK=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -print | sort -V | tail -n 1)
+          test -n "$PICK"
+          sudo xcode-select -s "$PICK/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Reconstruct and verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat codexpad_payload/part*.txt | /usr/bin/base64 -D > CodexPad-v2-cn.zip
+          ACTUAL=$(shasum -a 256 CodexPad-v2-cn.zip | awk '{print $1}')
+          echo "Source SHA256: $ACTUAL"
+          test "$ACTUAL" = "4da2b07adc5693f80dcc462f4d80e14aaf3721d84918a64b73e68b31d655aa6b"
+          unzip -t CodexPad-v2-cn.zip
+          mkdir -p source
+          unzip -q CodexPad-v2-cn.zip -d source
+          test -d source/CodexPad/CodexPad.xcodeproj
+
+      - name: Run Core tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source/CodexPad
+          swift test
+
+      - name: Build unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source/CodexPad
+          xcodebuild clean build \
+            -project CodexPad.xcodeproj \
+            -scheme CodexPad \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$GITHUB_WORKSPACE/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+
+          APP=$(find "$GITHUB_WORKSPACE/DerivedData/Build/Products/Release-iphoneos" -name "*.app" -type d | head -n 1)
+          echo "Built app: $APP"
+          test -n "$APP"
+
+          mkdir -p "$GITHUB_WORKSPACE/ipa/Payload"
+          cp -R "$APP" "$GITHUB_WORKSPACE/ipa/Payload/"
+          cd "$GITHUB_WORKSPACE/ipa"
+          /usr/bin/ditto -c -k --keepParent Payload "$GITHUB_WORKSPACE/CodexPad-v2-cn-unsigned.ipa"
+          unzip -t "$GITHUB_WORKSPACE/CodexPad-v2-cn-unsigned.ipa"
+          shasum -a 256 "$GITHUB_WORKSPACE/CodexPad-v2-cn-unsigned.ipa"
+
+      - name: Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexPad-v2-cn-unsigned
+          path: |
+            CodexPad-v2-cn-unsigned.ipa
+            xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexPad-v2-cn-diagnostics
+          path: |
+            xcodebuild.log
+            CodexPad-v2-cn.zip
+          if-no-files-found: ignore
+          retention-days: 14
