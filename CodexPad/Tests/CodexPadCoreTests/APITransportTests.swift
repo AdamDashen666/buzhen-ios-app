@@ -69,6 +69,33 @@ final class AgentControllerTests: XCTestCase {
         XCTAssertTrue(agent.pendingChanges.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("b.txt").path))
         XCTAssertNil(agent.errorMessage)
+        MockProtocol.lock.withLock {
+            MockProtocol.handler = { request in
+                let body = request.httpBody ?? request.httpBodyStream.map { stream in
+                    stream.open()
+                    defer { stream.close() }
+                    var data = Data()
+                    var buffer = [UInt8](repeating: 0, count: 4096)
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&buffer, maxLength: buffer.count)
+                        if count <= 0 { break }
+                        data.append(contentsOf: buffer.prefix(count))
+                    }
+                    return data
+                } ?? Data()
+                let value = try? JSONDecoder().decode(JSONValue.self, from: body)
+                if case .array(let input) = value?["input"],
+                   input.contains(where: { $0["call_id"] == .string("overflow") && $0["type"] == .string("function_call_output") }) {
+                    return (200, #"{"id":"done","output":[{"type":"message","content":[{"type":"output_text","text":"已到末尾"}]}]}"#)
+                }
+                return (200, #"{"id":"r","output":[{"type":"function_call","call_id":"overflow","name":"read_file","arguments":"{\"path\":\"a.txt\",\"start_line\":\"9223372036854775807\",\"line_count\":\"200\"}"}]}"#)
+            }
+        }
+        agent.newChat()
+        XCTAssertTrue(agent.send("读取极大行号"))
+        await agent.waitUntilIdle()
+        XCTAssertNil(agent.errorMessage)
+        XCTAssertTrue(agent.messages.contains { $0.text == "已到末尾" })
         workspace.closeFolder()
     }
 }

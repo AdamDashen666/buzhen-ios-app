@@ -251,8 +251,8 @@ final class AgentController: ObservableObject {
                   let count = Int(args["line_count"] ?? "200"), (1...200).contains(count) else { throw AgentError.invalidArguments }
             return try await session.perform {
                 let lines = try $0.readSnapshot(path: path).text.components(separatedBy: "\n")
-                let end = min(lines.count, start - 1 + count)
                 guard start <= lines.count else { return "已到文件末尾，共 \(lines.count) 行。" }
+                let end = start - 1 + min(count, lines.count - (start - 1))
                 let text = (start - 1..<end).map { "\($0 + 1): \(lines[$0])" }.joined(separator: "\n")
                 return "共 \(lines.count) 行，本次 \(start) 至 \(end) 行。\n" +
                     String(text.prefix(24_000)) + (text.count > 24_000 ? "\n本页内容过长已截断，请缩小行数。" : "")

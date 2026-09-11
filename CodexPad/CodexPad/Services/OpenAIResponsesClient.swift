@@ -83,7 +83,7 @@ struct OpenAIResponsesClient: Sendable {
         let tool = FunctionTool(name: "codexpad_probe", description: "确认工具调用能力。", properties: [:])
         let response = try await create(request: Request(
             model: model, input: [.user("调用 codexpad_probe。")], instructions: "只调用指定工具。",
-            tools: [tool], toolChoice: "required", maxOutputTokens: 256
+            tools: [tool], toolChoice: "required", maxOutputTokens: 2048
         ))
         guard response.functionCalls.contains(where: { $0.name == "codexpad_probe" }) else { throw APIError.unsupportedModel }
         return response.model ?? model
