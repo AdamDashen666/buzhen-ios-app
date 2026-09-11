@@ -63,4 +63,25 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertNotNil(store.errorMessage)
         XCTAssertNotNil(defaults.data(forKey: "workspace.securityScopedBookmark"))
     }
+
+    func testCancelledOpenCannotPublishOverNewProjectAndDiagnosticsPersist() async throws {
+        let suite = "CodexPad.Tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("current".utf8).write(to: root.appendingPathComponent("当前.txt"))
+        defer { try? FileManager.default.removeItem(at: root); defaults.removePersistentDomain(forName: suite) }
+        let store = WorkspaceStore(defaults: defaults)
+        store.openFolder(root.appendingPathComponent("不存在"))
+        store.cancelOpening()
+        store.openFolder(root)
+        await store.waitForOpening()
+        XCTAssertEqual(store.entries.map(\.name), ["当前.txt"])
+        XCTAssertNil(store.openingFailure)
+        XCTAssertFalse(store.needsAuthorization)
+        let restored = WorkspaceStore(defaults: defaults)
+        XCTAssertTrue(restored.diagnosticsText.contains("项目已打开"))
+        XCTAssertFalse(restored.diagnosticsText.contains(root.path))
+        store.closeFolder()
+    }
 }

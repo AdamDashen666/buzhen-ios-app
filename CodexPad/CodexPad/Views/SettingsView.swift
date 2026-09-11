@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var agent: AgentController
+    @EnvironmentObject private var workspace: WorkspaceStore
     @Environment(\.dismiss) private var dismiss
     @State private var apiKey = ""
     @State private var baseURL = ""
@@ -45,6 +46,18 @@ struct SettingsView: View {
                         }.disabled(settings.isDetecting || agent.isRunning || saving)
                         Button("移除 API Key", role: .destructive) { confirmRemove = true }
                             .disabled(agent.isRunning || saving)
+                    }
+                }
+                Section("文件夹访问诊断") {
+                    Text("版本 3.1（4）").font(.caption).foregroundStyle(.secondary)
+                    Text(workspace.openingStage.isEmpty ? "暂无本次打开记录" : workspace.openingStage)
+                        .font(.callout)
+                    ShareLink(item: workspace.diagnosticsText) {
+                        Label("导出打开记录", systemImage: "square.and.arrow.up")
+                    }
+                    DisclosureGroup("查看打开记录") {
+                        Text(workspace.diagnosticsText).font(.caption.monospaced())
+                            .textSelection(.enabled)
                     }
                 }
             }

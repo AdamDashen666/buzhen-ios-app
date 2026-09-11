@@ -56,7 +56,7 @@ final class CodexPadUITests: XCTestCase {
         screenshot("portrait-assistant-dark", app: app)
     }
 
-    func testRealDocumentPickerOpensLocalFolder() throws {
+    func testExternalDocumentPickerOpensWritesAndRestoresFolder() throws {
         let app = launch(["--ui-picker"])
         XCUIDevice.shared.orientation = .landscapeLeft
         let open = app.buttons["open-folder"].firstMatch
@@ -72,22 +72,33 @@ final class CodexPadUITests: XCTestCase {
             let browse = app.buttons["浏览"].firstMatch
             if browse.exists { browse.tap() }
         }
-        guard local.waitForExistence(timeout: 5) else {
-            cancel.tap()
-            throw XCTSkip("此模拟器未提供本地 Files 文档提供器；外部文件夹授权仍需真机验证。")
-        }
+        XCTAssertTrue(local.waitForExistence(timeout: 5), "必须存在本地文档提供器")
         local.tap()
-        let container = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "CodexPad")).firstMatch
-        guard container.waitForExistence(timeout: 8) else {
-            screenshot("document-provider-container-unavailable", app: app)
-            throw XCTSkip("模拟器未注册 App 的文档容器，文件提供器验收需真机。")
-        }
+        let container = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "授权测试源")).firstMatch
+        XCTAssertTrue(container.waitForExistence(timeout: 15), "CI 必须预先安装并启动独立测试 App")
         container.tap()
-        let folder = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "示例项目")).firstMatch
+        let folder = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "外部示例项目")).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 10))
         folder.tap()
         app.buttons["打开"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["README.md"].firstMatch.waitForExistence(timeout: 20))
-        screenshot("picker-opened-project", app: app)
+        let marker = app.buttons["外部标记.txt"].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 35))
+        marker.tap()
+        let editor = app.textViews.firstMatch
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText("\nexternal-saved")
+        app.buttons["保存"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["已保存"].firstMatch.waitForExistence(timeout: 10))
+        screenshot("external-picker-opened-and-saved", app: app)
+        app.terminate()
+        let restored = launch()
+        let restoredMarker = restored.buttons["外部标记.txt"].firstMatch
+        XCTAssertTrue(restoredMarker.waitForExistence(timeout: 35), "重启后必须从书签恢复外部目录")
+        restoredMarker.tap()
+        let restoredEditor = restored.textViews.firstMatch
+        XCTAssertTrue(restoredEditor.waitForExistence(timeout: 10))
+        XCTAssertTrue((restoredEditor.value as? String)?.contains("external-saved") == true)
+        screenshot("external-bookmark-restored", app: restored)
     }
 }

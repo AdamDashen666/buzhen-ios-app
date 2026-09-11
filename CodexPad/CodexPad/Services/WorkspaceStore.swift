@@ -5,57 +5,48 @@ final class WorkspaceSession: @unchecked Sendable {
     let id = UUID()
     let url: URL
     private let hasScope: Bool
-    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "CodexPad.workspace.io", qos: .userInitiated)
     private var fileService: WorkspaceFileService?
 
-    init(url: URL) {
+    private init(url: URL) throws {
         self.url = url
         hasScope = url.startAccessingSecurityScopedResource()
+        #if os(iOS)
+        if !hasScope {
+            let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
+            let path = url.resolvingSymlinksInPath().path
+            guard path.hasPrefix(home + "/") else { throw WorkspaceFileError.permissionDenied }
+        }
+        #endif
     }
 
     deinit { if hasScope { url.stopAccessingSecurityScopedResource() } }
 
+    static func open(_ url: URL) async throws -> WorkspaceSession {
+        // Keep the original URL (and its sandbox extension) across the callback.
+        try await FileIOExecutor.run { _ in try WorkspaceSession(url: url) }
+    }
+
     func perform<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceFileService) throws -> T) async throws -> T {
-        let control = FileOperationControl()
-        let job = Task.detached(priority: .userInitiated) { [self] in
-            try lock.withLock {
-                try Task.checkCancellation()
-                if fileService == nil { fileService = try WorkspaceFileService(rootURL: url) }
-                return try operation(fileService!.controlled(by: control))
-            }
-        }
-        let timeout = Task.detached {
-            do { try await Task.sleep(for: .seconds(30)) }
-            catch { return }
-            control.cancel(timeout: true)
-            job.cancel()
-        }
-        defer { timeout.cancel() }
-        do {
-            return try await withTaskCancellationHandler {
-                try await job.value
-            } onCancel: { control.cancel(); job.cancel() }
-        } catch {
-            if control.timedOut { throw WorkspaceFileError.timedOut }
-            throw error
+        try await FileIOExecutor.run(queue: queue) { [self] control in
+            if fileService == nil { fileService = try WorkspaceFileService(rootURL: url, control: control) }
+            return try operation(fileService!.controlled(by: control))
         }
     }
 
     func bookmark() async throws -> Data {
-        let job = Task.detached { [self] in
-            try Task.checkCancellation()
+        try await FileIOExecutor.run { [self] _ in
             return try url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
         }
-        return try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
     }
 
     static func restore(_ data: Data) async throws -> WorkspaceSession {
-        try await Task.detached {
+        try await FileIOExecutor.run { _ in
             var stale = false
             let url = try URL(resolvingBookmarkData: data, options: [.withoutUI], bookmarkDataIsStale: &stale)
             // Recreate the bookmark after every successful restore, including stale bookmarks.
-            return WorkspaceSession(url: url)
-        }.value
+            return try WorkspaceSession(url: url)
+        }
     }
 }
 
@@ -77,6 +68,9 @@ final class WorkspaceStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var fileNotice: String?
     @Published var editorLine = 1
+    @Published private(set) var openingStage = ""
+    @Published private(set) var openingFailure: String?
+    @Published private(set) var openDiagnostics: [String] = []
 
     private let defaults: UserDefaults
     private let bookmarkKey = "workspace.securityScopedBookmark"
@@ -87,7 +81,10 @@ final class WorkspaceStore: ObservableObject {
     private var savedRevision: String?
     private var didRestore = false
 
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        openDiagnostics = defaults.stringArray(forKey: "workspace.openDiagnostics") ?? []
+    }
     var rootURL: URL? { session?.url }
     var isDirty: Bool { selectedPath != nil && editorText != savedEditorText }
     var displayName: String { rootURL?.lastPathComponent ?? "项目" }
@@ -98,6 +95,7 @@ final class WorkspaceStore: ObservableObject {
         didRestore = true
         guard let data = defaults.data(forKey: bookmarkKey) else { return }
         let generation = beginOpening()
+        recordOpenEvent("正在恢复最近项目权限")
         openTask = Task { [weak self] in
             do {
                 let restored = try await WorkspaceSession.restore(data)
@@ -115,15 +113,19 @@ final class WorkspaceStore: ObservableObject {
             return
         }
         let generation = beginOpening()
-        // Acquire the lightweight scope while the picker callback is still alive.
-        // Bookmark creation and provider access happen only in background operations.
-        let candidate = WorkspaceSession(url: url)
+        recordOpenEvent("正在获取文件夹访问权限")
         openTask = Task { [weak self] in
-            await self?.finishOpening(candidate, generation: generation)
+            do {
+                let candidate = try await WorkspaceSession.open(url)
+                try Task.checkCancellation()
+                guard let self, self.openGeneration == generation else { return }
+                await self.finishOpening(candidate, generation: generation)
+            } catch { self?.openingFailed(error, generation: generation) }
         }
     }
 
     func cancelOpening() {
+        if isOpening { recordOpenEvent("已取消打开项目") }
         openTask?.cancel()
         openGeneration = UUID()
         isOpening = false
@@ -262,11 +264,13 @@ final class WorkspaceStore: ObservableObject {
         isOpening = true
         needsAuthorization = false
         errorMessage = nil
+        openingFailure = nil
         return openGeneration
     }
 
     private func finishOpening(_ candidate: WorkspaceSession, generation: UUID) async {
         do {
+            recordOpenEvent("已取得访问资格，正在协调文件提供器并读取首层目录")
             // Opening only enumerates the first level, never descendants.
             let tree = try await candidate.perform { try $0.listDirectory(path: "") }
             try Task.checkCancellation()
@@ -279,13 +283,16 @@ final class WorkspaceStore: ObservableObject {
             isOpening = false
             isLoadingTree = false
             needsAuthorization = false
+            recordOpenEvent("项目已打开，共 \(tree.count) 项")
             do {
                 let data = try await candidate.bookmark()
                 guard generation == openGeneration else { return }
                 defaults.set(data, forKey: bookmarkKey)
+                recordOpenEvent("最近项目权限已保存")
             } catch {
                 guard generation == openGeneration else { return }
                 errorMessage = "项目已打开，但无法保存下次访问权限。重启后请重新选择文件夹。"
+                recordOpenEvent("无法保存书签：\(Self.describe(error))")
             }
         } catch { openingFailed(error, generation: generation) }
     }
@@ -295,7 +302,24 @@ final class WorkspaceStore: ObservableObject {
         isOpening = false
         if error is CancellationError { return }
         needsAuthorization = true
-        errorMessage = "无法打开项目：\(Self.describe(error))\n请点击“重新授权”选择文件夹。"
+        openingFailure = "无法打开项目：\(Self.describe(error))"
+        recordOpenEvent(openingFailure!)
+        errorMessage = openingFailure
+    }
+
+    func recordOpenEvent(_ message: String) {
+        openingStage = message
+        let time = Date().formatted(date: .omitted, time: .standard)
+        openDiagnostics.append("\(time) \(message)")
+        openDiagnostics = Array(openDiagnostics.suffix(30))
+        defaults.set(openDiagnostics, forKey: "workspace.openDiagnostics")
+    }
+
+    var diagnosticsText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "测试"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "测试"
+        return "CodexPad \(version) (\(build))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\n" +
+            openDiagnostics.joined(separator: "\n")
     }
 
     private func clearEditor() {

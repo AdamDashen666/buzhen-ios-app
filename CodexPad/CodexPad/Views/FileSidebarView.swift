@@ -31,12 +31,17 @@ struct FileSidebarView: View {
             if workspace.isOpening {
                 VStack(spacing: 16) {
                     ProgressView("正在打开项目…")
+                    Text(workspace.openingStage).font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("opening-stage")
                     Button("取消") { workspace.cancelOpening() }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if workspace.needsAuthorization {
                 ContentUnavailableView {
                     Label("需要重新授权", systemImage: "folder.badge.questionmark")
+                } description: {
+                    Text(workspace.openingFailure ?? "请重新选择允许访问的项目文件夹。")
                 } actions: { Button("重新授权", action: onOpenProject).buttonStyle(.borderedProminent) }
             } else if workspace.rootURL == nil {
                 ContentUnavailableView {

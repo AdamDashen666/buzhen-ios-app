@@ -28,13 +28,14 @@ struct FileSnapshot: Sendable {
 }
 
 enum WorkspaceFileError: LocalizedError {
-    case noWorkspace, rootMutation, cancelled, changed, invalidReplacement, tooManyEntries, timedOut
+    case noWorkspace, rootMutation, cancelled, changed, invalidReplacement, tooManyEntries, timedOut, permissionDenied
     case binaryOrInvalidUTF8(String), tooLarge(String), symlinkNotAllowed(String)
     case notFound(String), alreadyExists(String), directoryNotEmpty(String), io(String, Int32)
 
     var errorDescription: String? {
         switch self {
         case .noWorkspace: return "请先打开项目文件夹。"
+        case .permissionDenied: return "系统未授予文件夹访问权限。请检查系统“隐私与安全性”中的文件与文件夹权限，再重新选择目录。"
         case .rootMutation: return "不允许修改、移动或删除工作区根目录。"
         case .cancelled: return "操作已取消。"
         case .changed: return "文件已被其他操作修改、移动或删除。为避免覆盖，已停止保存；请重新读取后审查。"
@@ -61,13 +62,32 @@ enum WorkspaceFileError: LocalizedError {
 // after validation. Descriptors and security scopes outlive each operation.
 struct WorkspaceFileService: Sendable {
     let rootURL: URL
+    private let providerURL: URL
     private let rootHandle: DirectoryHandle
     private var cancellation: FileOperationControl?
     static let maxTextBytes = 2 * 1024 * 1024
 
-    init(rootURL: URL) throws {
-        self.rootURL = rootURL.resolvingSymlinksInPath().standardizedFileURL
-        rootHandle = try DirectoryHandle(url: self.rootURL)
+    init(rootURL: URL, control: FileOperationControl? = nil) throws {
+        guard rootURL.isFileURL else { throw WorkspaceFileError.noWorkspace }
+        providerURL = rootURL
+        let coordinator = NSFileCoordinator()
+        try control?.register(coordinator)
+        defer { control?.unregister() }
+        var error: NSError?
+        var opened: Result<(URL, DirectoryHandle), Error>?
+        // File Provider URLs must be coordinated before the first filesystem
+        // access. Opening a descriptor beforehand assumes a materialized folder.
+        coordinator.coordinate(readingItemAt: rootURL, options: .withoutChanges, error: &error) { coordinatedURL in
+            opened = Result {
+                try control?.check()
+                let localURL = coordinatedURL.resolvingSymlinksInPath().standardizedFileURL
+                return (localURL, try DirectoryHandle(url: localURL))
+            }
+        }
+        try control?.check()
+        if let error { throw error }
+        guard let opened else { throw WorkspaceFileError.cancelled }
+        (self.rootURL, rootHandle) = try opened.get()
     }
 
     func controlled(by control: FileOperationControl) -> Self {
@@ -78,7 +98,9 @@ struct WorkspaceFileService: Sendable {
 
     func listDirectory(path: String) throws -> [WorkspaceEntry] {
         let normalized = try WorkspacePathGuard.normalize(path)
-        return try coordinate { try listUncoordinated(normalized) }
+        return try coordinate(path: normalized.isEmpty ? nil : normalized, readingOptions: .withoutChanges) {
+            try listUncoordinated(normalized)
+        }
     }
 
     func readSnapshot(path: String) throws -> FileSnapshot {
@@ -128,7 +150,7 @@ struct WorkspaceFileService: Sendable {
 
     func apply(_ change: PendingChange) throws {
         try coordinate(writing: true) {
-            try Task.checkCancellation()
+            try checkCancellation()
             try requireNonRoot(change.path)
             switch change.kind {
             case .write:
@@ -183,9 +205,9 @@ struct WorkspaceFileService: Sendable {
         var skipped = 0
         let deadline = Date().addingTimeInterval(15)
         while let directory = queue.popLast() {
-            try Task.checkCancellation()
+            try checkCancellation()
             for entry in try listDirectory(path: directory) {
-                try Task.checkCancellation()
+                try checkCancellation()
                 visited += 1
                 if visited > 5000 || hits.count >= 100 || Date() > deadline {
                     return SearchResults(hits: hits, truncated: true, skippedFiles: skipped)
@@ -222,8 +244,13 @@ struct WorkspaceFileService: Sendable {
         guard let dir = fdopendir(fd) else { close(fd); throw failure(path) }
         defer { closedir(dir) }
         var entries: [WorkspaceEntry] = []
-        while let pointer = readdir(dir) {
-            try Task.checkCancellation()
+        while true {
+            errno = 0
+            guard let pointer = readdir(dir) else {
+                if errno != 0 { throw failure(path) }
+                break
+            }
+            try checkCancellation()
             let name = withUnsafePointer(to: &pointer.pointee.d_name) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
             }
@@ -255,7 +282,7 @@ struct WorkspaceFileService: Sendable {
             var data = Data()
             var buffer = [UInt8](repeating: 0, count: 64 * 1024)
             while true {
-                try Task.checkCancellation()
+                try checkCancellation()
                 let count = Darwin.read(fd, &buffer, buffer.count)
                 if count == 0 { break }
                 if count < 0 {
@@ -283,7 +310,7 @@ struct WorkspaceFileService: Sendable {
             try data.withUnsafeBytes { bytes in
                 var offset = 0
                 while offset < bytes.count {
-                    try Task.checkCancellation()
+                    try checkCancellation()
                     let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
                     if count < 0 && errno == EINTR { continue }
                     guard count > 0 else { throw failure(path) }
@@ -291,7 +318,7 @@ struct WorkspaceFileService: Sendable {
                 }
             }
             guard fsync(fd) == 0 else { throw failure(path) }
-            try Task.checkCancellation()
+            try checkCancellation()
             let flags: UInt32 = create ? UInt32(RENAME_EXCL) : 0
             guard renameatx_np(parent, temporary, parent, leaf, flags) == 0 else { throw failure(path) }
         }
@@ -305,7 +332,7 @@ struct WorkspaceFileService: Sendable {
     private func revision(_ path: String, includeChildren: Bool, remaining: inout Int, depth: Int) throws -> String {
         remaining -= 1
         guard remaining >= 0, depth <= 64 else { throw WorkspaceFileError.tooManyEntries }
-        try Task.checkCancellation()
+        try checkCancellation()
         return try withParent(path) { parent, leaf in
             var info = stat()
             guard fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw failure(path) }
@@ -365,9 +392,15 @@ struct WorkspaceFileService: Sendable {
     private func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     private func failure(_ path: String) -> WorkspaceFileError { .io(path, errno) }
 
-    private func coordinate<T>(path: String? = nil, writing: Bool = false, _ body: @escaping () throws -> T) throws -> T {
+    private func checkCancellation() throws {
         try Task.checkCancellation()
         try cancellation?.check()
+    }
+
+    private func coordinate<T>(path: String? = nil, writing: Bool = false,
+                               readingOptions: NSFileCoordinator.ReadingOptions = [],
+                               _ body: @escaping () throws -> T) throws -> T {
+        try checkCancellation()
         let target: URL
         if let path {
             try withParent(path) { parent, leaf in
@@ -376,8 +409,8 @@ struct WorkspaceFileService: Sendable {
                 if status != 0 && errno != ENOENT { throw failure(path) }
                 if status == 0 && info.st_mode & S_IFMT == S_IFLNK { throw WorkspaceFileError.symlinkNotAllowed(path) }
             }
-            target = rootURL.appendingPathComponent(try WorkspacePathGuard.normalize(path))
-        } else { target = rootURL }
+            target = providerURL.appendingPathComponent(try WorkspacePathGuard.normalize(path))
+        } else { target = providerURL }
         if path != nil && FileManager.default.isUbiquitousItem(at: target) {
             try FileManager.default.startDownloadingUbiquitousItem(at: target)
         }
@@ -388,9 +421,9 @@ struct WorkspaceFileService: Sendable {
         defer { cancellation?.unregister() }
         let accessor: (URL) -> Void = { url in
             result = Result {
-                try Task.checkCancellation()
-                try cancellation?.check()
-                guard url.standardizedFileURL == target.standardizedFileURL else {
+                try checkCancellation()
+                let expected = path.map { rootURL.appendingPathComponent($0) } ?? rootURL
+                guard url.resolvingSymlinksInPath().standardizedFileURL == expected.standardizedFileURL else {
                     throw WorkspaceFileError.changed
                 }
                 var live = stat()
@@ -404,7 +437,7 @@ struct WorkspaceFileService: Sendable {
         if writing {
             coordinator.coordinate(writingItemAt: target, options: [], error: &error, byAccessor: accessor)
         } else {
-            coordinator.coordinate(readingItemAt: target, options: [], error: &error, byAccessor: accessor)
+            coordinator.coordinate(readingItemAt: target, options: readingOptions, error: &error, byAccessor: accessor)
         }
         if result == nil { try cancellation?.check() }
         if let error { throw error }

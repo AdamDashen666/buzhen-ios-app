@@ -11,6 +11,8 @@ struct RootView: View {
     @State private var pane = 0
     @State private var pendingNavigation: Navigation?
     @State private var showProtection = false
+    @State private var pickedFolder: URL?
+    @State private var pickerID = UUID()
 
     private enum Navigation {
         case file(String, Int), open, close
@@ -42,16 +44,26 @@ struct RootView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .preferredColorScheme(testColorScheme)
-        .sheet(isPresented: $app.showingFolderImporter) {
+        .sheet(isPresented: $app.showingFolderImporter, onDismiss: {
+            workspace.recordOpenEvent("文件选择器已关闭")
+            guard let url = pickedFolder else { return }
+            pickedFolder = nil
+            workspace.openFolder(url)
+        }) {
             FolderPicker { result in
                 switch result {
                 case .success(let url):
-                    if let url { workspace.openFolder(url); pane = 0 }
+                    pickedFolder = url
+                    workspace.recordOpenEvent(url == nil ? "用户取消选择文件夹" : "收到系统文件夹选择回调")
+                    if url != nil { pane = 0 }
                 case .failure:
+                    workspace.recordOpenEvent("系统选择回调未包含文件夹")
                     workspace.errorMessage = "系统未返回所选文件夹，请重新选择。"
                 }
                 app.showingFolderImporter = false
             }
+            .id(pickerID)
+            .onAppear { workspace.recordOpenEvent("文件选择器已显示，等待系统返回选择结果") }
             .ignoresSafeArea()
         }
         .sheet(isPresented: $app.showingSettings) { SettingsView() }
@@ -157,6 +169,9 @@ struct RootView: View {
             }
         case .open:
             agent.newChat()
+            pickedFolder = nil
+            pickerID = UUID()
+            workspace.recordOpenEvent("请求打开文件选择器")
             app.showingFolderImporter = true
         case .close:
             agent.newChat()
@@ -177,11 +192,13 @@ struct FolderPicker: UIViewControllerRepresentable {
         picker.shouldShowFileExtensions = true
         return picker
     }
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {
+        context.coordinator.completion = completion
+    }
 
     @MainActor
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let completion: @MainActor (Result<URL?, Error>) -> Void
+        var completion: @MainActor (Result<URL?, Error>) -> Void
         private var delivered = false
         init(completion: @escaping @MainActor (Result<URL?, Error>) -> Void) { self.completion = completion }
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {

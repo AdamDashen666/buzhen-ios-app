@@ -11,7 +11,7 @@ let package = Package(
         .target(
             name: "CodexPadCore",
             path: ".",
-            exclude: ["Tests", "UITests", "docs", "README.md", "CodexPad.xcodeproj", "CodexPad/Views",
+            exclude: ["Tests", "UITests", "UITestSupport", "docs", "README.md", "CodexPad.xcodeproj", "CodexPad/Views",
                       "CodexPad/Resources", "CodexPad/App/CodexPadApp.swift", "CodexPad/App/AppState.swift"],
             sources: ["Sources/CodexPadCore", "CodexPad/Services", "CodexPad/App/AppSettings.swift"]
         ),
