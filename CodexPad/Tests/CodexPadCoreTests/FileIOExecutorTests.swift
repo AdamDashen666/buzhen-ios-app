@@ -23,20 +23,18 @@ final class FileIOExecutorTests: XCTestCase, @unchecked Sendable {
     }
 
     func testCancellationReturnsBeforeBlockedWorkerExits() async {
-        let started = DispatchSemaphore(value: 0)
+        let started = expectation(description: "Provider has started")
         let release = DispatchSemaphore(value: 0)
         let ended = expectation(description: "Cancelled worker drains safely")
         let task = Task {
             try await FileIOExecutor.run { _ in
                 defer { ended.fulfill() }
-                started.signal()
+                started.fulfill()
                 _ = release.wait(timeout: .now() + 3)
                 return 42
             }
         }
-        while started.wait(timeout: .now()) == .timedOut {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        await fulfillment(of: [started], timeout: 2)
         let start = Date()
         task.cancel()
         do { _ = try await task.value; XCTFail("Expected cancellation") }
