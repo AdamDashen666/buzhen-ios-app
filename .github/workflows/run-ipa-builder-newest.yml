@@ -178,7 +178,7 @@ jobs:
           ls -lh "$IPA_PATH" "$IPA_PATH.sha256" | tee -a logs/build-summary.txt
 
       - name: Run iPad UI regression tests
-        timeout-minutes: 18
+        timeout-minutes: 25
         shell: bash
         run: |
           set -euo pipefail
@@ -187,7 +187,8 @@ jobs:
             echo "This source package has no iPad UI test target."
             exit 0
           fi
-          DEVICE=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; ds=[d for a in json.load(sys.stdin)["devices"].values() for d in a if "iPad" in d["name"]]; print(ds[0]["udid"] if ds else "")')
+          xcrun simctl list devices available -j > logs/available-simulators.json
+          DEVICE=$(python3 -c 'import json; devices=json.load(open("logs/available-simulators.json"))["devices"]; runtimes=sorted(devices, key=lambda s: tuple(int(p) for p in s.split("iOS-")[-1].split("-") if p.isdigit()), reverse=True); ds=[d for r in runtimes if "iOS-" in r for d in devices[r] if "iPad" in d["name"]]; print(ds[0]["udid"] if ds else "")')
           test -n "$DEVICE"
           echo "$DEVICE" > logs/ui-test-device.txt
           xcrun simctl boot "$DEVICE" || true
@@ -208,6 +209,7 @@ jobs:
           set +e
           xcodebuild test \
             -project "$PROJECT" -scheme CodexPad \
+            -configuration Release \
             -destination "platform=iOS Simulator,id=$DEVICE" \
             -derivedDataPath "$GITHUB_WORKSPACE/SimulatorBuild" \
             -resultBundlePath "$GITHUB_WORKSPACE/logs/UITests.xcresult" \

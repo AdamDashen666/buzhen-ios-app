@@ -49,7 +49,8 @@ struct SettingsView: View {
                     }
                 }
                 Section("文件夹访问诊断") {
-                    Text("版本 3.1（4）").font(.caption).foregroundStyle(.secondary)
+                    Text("版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知")（\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知")）")
+                        .font(.caption).foregroundStyle(.secondary)
                     Text(workspace.openingStage.isEmpty ? "暂无本次打开记录" : workspace.openingStage)
                         .font(.callout)
                     ShareLink(item: workspace.diagnosticsText) {

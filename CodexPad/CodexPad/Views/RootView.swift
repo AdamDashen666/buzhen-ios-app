@@ -11,7 +11,6 @@ struct RootView: View {
     @State private var pane = 0
     @State private var pendingNavigation: Navigation?
     @State private var showProtection = false
-    @State private var pickerID = UUID()
 
     private enum Navigation {
         case file(String, Int), open, close
@@ -43,11 +42,11 @@ struct RootView: View {
         }
         .background(Color(uiColor: .systemBackground))
         .preferredColorScheme(testColorScheme)
-        .sheet(isPresented: $app.showingFolderImporter) {
-            FolderPicker { handleFolderPickerResult($0) }
-            .id(pickerID)
-            .onAppear { workspace.recordOpenEvent("文件选择器已显示，等待系统返回选择结果") }
-            .ignoresSafeArea()
+        .background {
+            FolderPickerPresenter(isPresented: app.showingFolderImporter,
+                                  onEvent: workspace.recordOpenEvent,
+                                  completion: handleFolderPickerResult)
+                .frame(width: 0, height: 0)
         }
         .sheet(isPresented: $app.showingSettings) { SettingsView() }
         .alert("继续前处理当前工作", isPresented: $showProtection) {
@@ -151,8 +150,8 @@ struct RootView: View {
                 catch { workspace.errorMessage = WorkspaceStore.describe(error) }
             }
         case .open:
+            guard !app.showingFolderImporter else { return }
             agent.newChat()
-            pickerID = UUID()
             workspace.recordOpenEvent("请求打开文件选择器")
             app.showingFolderImporter = true
         case .close:
@@ -174,53 +173,142 @@ struct RootView: View {
             workspace.recordOpenEvent("收到系统文件夹选择回调，立即开始打开")
             workspace.openFolder(url)
             app.showingFolderImporter = false
-        case .failure:
-            workspace.recordOpenEvent("系统选择回调未包含文件夹")
-            workspace.errorMessage = "系统未返回所选文件夹，请重新选择。"
+        case .failure(let error):
+            workspace.recordOpenEvent("选择文件夹失败：\(error.localizedDescription)")
+            workspace.errorMessage = error.localizedDescription
             app.showingFolderImporter = false
         }
     }
 }
 
-struct FolderPicker: UIViewControllerRepresentable {
+// SwiftUI owns only the presentation anchor, never the document picker's delegate.
+@MainActor
+struct FolderPickerPresenter: UIViewControllerRepresentable {
+    let isPresented: Bool
+    let onEvent: @MainActor (String) -> Void
     let completion: @MainActor (Result<URL?, Error>) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(completion: completion) }
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
-        picker.delegate = context.coordinator
+    func makeUIViewController(context: Context) -> FolderPickerHostController {
+        FolderPickerHostController()
+    }
+
+    func updateUIViewController(_ controller: FolderPickerHostController, context: Context) {
+        controller.onEvent = onEvent
+        controller.completion = completion
+        controller.setRequested(isPresented)
+    }
+}
+
+@MainActor
+final class FolderPickerHostController: UIViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
+    var onEvent: (@MainActor (String) -> Void)?
+    var completion: (@MainActor (Result<URL?, Error>) -> Void)?
+    private var picker: ObservedFolderPicker?
+    private var requested = false
+    private var delivered = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        presentIfNeeded()
+    }
+
+    func setRequested(_ value: Bool) {
+        guard requested != value else { return }
+        requested = value
+        // Leave the SwiftUI update transaction before presenting or publishing state.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.requested { self.presentIfNeeded() }
+            else if let picker = self.picker, !self.delivered {
+                self.finish(.success(nil), from: picker)
+            }
+        }
+    }
+
+    private func presentIfNeeded() {
+        guard requested, picker == nil, viewIfLoaded?.window != nil else { return }
+        let picker = ObservedFolderPicker(forOpeningContentTypes: [.folder], asCopy: false)
+        picker.delegate = self
         picker.allowsMultipleSelection = false
         picker.shouldShowFileExtensions = true
-        return picker
-    }
-    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {
-        context.coordinator.completion = completion
-    }
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        var completion: @MainActor (Result<URL?, Error>) -> Void
-        private var delivered = false
-        init(completion: @escaping @MainActor (Result<URL?, Error>) -> Void) { self.completion = completion }
-
-        private func deliver(_ result: Result<URL?, Error>) {
-            guard !delivered else { return }
-            delivered = true
-            let completion = completion
-            DispatchQueue.main.async {
-                completion(result)
+        picker.modalPresentationStyle = .formSheet
+        picker.onDisappear = { [weak self, weak picker] in
+            guard let self, let picker else { return }
+            self.onEvent?("原生文件选择器已离开屏幕")
+            // Check after UIKit's dismissal transaction, not after an arbitrary delay.
+            DispatchQueue.main.async { [weak self, weak picker] in
+                guard let self, let picker, self.picker === picker,
+                      !self.delivered, picker.presentingViewController == nil else { return }
+                self.finish(.failure(FolderPickerError.missingResult), from: picker)
             }
         }
+        self.picker = picker
+        delivered = false
+        onEvent?("原生文件选择器已创建，代理已绑定")
+        present(picker, animated: true) { [weak self, weak picker] in
+            guard let self, let picker, self.picker === picker else { return }
+            picker.presentationController?.delegate = self
+            self.onEvent?(picker.delegate === self
+                          ? "原生文件选择器已显示，代理仍有效"
+                          : "原生文件选择器代理被替换")
+            picker.delegate = self
+        }
+    }
 
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else {
-                deliver(.failure(WorkspaceFileError.noWorkspace))
-                return
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        onEvent?("原生代理收到目录结果，共 \(urls.count) 项")
+        guard let url = urls.first else {
+            finish(.failure(FolderPickerError.missingResult), from: controller)
+            return
+        }
+        finish(.success(url), from: controller)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        onEvent?("原生代理收到取消事件")
+        finish(.success(nil), from: controller)
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        onEvent?("用户交互关闭原生文件选择器")
+        finish(.success(nil), from: presentationController.presentedViewController)
+    }
+
+    private func finish(_ result: Result<URL?, Error>, from controller: UIViewController) {
+        guard picker === controller, !delivered else { return }
+        delivered = true
+        requested = false
+        // Start the workspace before dismissal. Keep the original scoped URL intact.
+        completion?(result)
+        if controller.presentingViewController != nil {
+            controller.dismiss(animated: true) { [weak self, weak controller] in
+                guard let self, self.picker === controller else { return }
+                self.picker = nil
+                self.presentIfNeeded()
             }
-            deliver(.success(url))
-        }
+        } else { picker = nil }
+    }
+}
 
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            deliver(.success(nil))
-        }
+@MainActor
+final class ObservedFolderPicker: UIDocumentPickerViewController {
+    var onDisappear: (@MainActor () -> Void)?
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        onDisappear?()
+    }
+}
+
+enum FolderPickerError: LocalizedError {
+    case missingResult
+
+    var errorDescription: String? {
+        "系统文件选择器已关闭，但没有返回目录。请重新选择文件夹；若再次失败，请导出打开记录。"
     }
 }
