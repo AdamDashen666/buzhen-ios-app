@@ -114,11 +114,11 @@ final class CodexPadUITests: XCTestCase {
             let open = app.buttons["open-folder"].firstMatch
             XCTAssertTrue(open.waitForExistence(timeout: 15))
             open.tap()
-            let cancel = app.buttons["取消"].firstMatch
-            XCTAssertTrue(cancel.waitForExistence(timeout: 15))
+            let dismissRegion = app.otherElements.matching(identifier: "PopoverDismissRegion").lastMatch
+            XCTAssertTrue(dismissRegion.waitForExistence(timeout: 15), "文件选择器必须显示")
             XCUIDevice.shared.orientation = attempt == 1 ? .portrait : .landscapeLeft
-            XCTAssertTrue(cancel.waitForExistence(timeout: 10))
-            cancel.tap()
+            XCTAssertTrue(dismissRegion.waitForExistence(timeout: 10))
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.03)).tap()
             XCTAssertTrue(open.waitForExistence(timeout: 10), "取消后必须能够再次打开选择器")
             XCTAssertFalse(app.alerts.firstMatch.exists, "主动取消不应显示失败警告")
         }
