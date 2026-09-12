@@ -114,7 +114,7 @@ final class CodexPadUITests: XCTestCase {
             let open = app.buttons["open-folder"].firstMatch
             XCTAssertTrue(open.waitForExistence(timeout: 15))
             open.tap()
-            let dismissRegion = app.otherElements.matching(identifier: "PopoverDismissRegion").lastMatch
+            let dismissRegion = app.otherElements.matching(identifier: "PopoverDismissRegion").firstMatch
             XCTAssertTrue(dismissRegion.waitForExistence(timeout: 15), "文件选择器必须显示")
             XCUIDevice.shared.orientation = attempt == 1 ? .portrait : .landscapeLeft
             XCTAssertTrue(dismissRegion.waitForExistence(timeout: 10))
