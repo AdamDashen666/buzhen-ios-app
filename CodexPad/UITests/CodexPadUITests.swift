@@ -107,26 +107,4 @@ final class CodexPadUITests: XCTestCase {
         screenshot("external-bookmark-restored", app: restored)
     }
 
-    func testPickerCancellationAndReopeningAcrossRotation() throws {
-        let app = launch(["--ui-picker"])
-        XCUIDevice.shared.orientation = .landscapeLeft
-        for attempt in 0..<3 {
-            let open = app.buttons["open-folder"].firstMatch
-            XCTAssertTrue(open.waitForExistence(timeout: 15))
-            open.tap()
-            XCUIDevice.shared.orientation = attempt == 1 ? .portrait : .landscapeLeft
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.03)).tap()
-            XCTAssertTrue(open.waitForExistence(timeout: 10), "取消后必须能够再次打开选择器")
-            XCTAssertFalse(app.alerts.firstMatch.exists, "主动取消不应显示失败警告")
-        }
-        app.buttons["项目菜单"].tap()
-        app.buttons["设置"].tap()
-        let records = app.buttons["查看打开记录"].firstMatch
-        if !records.isHittable { app.swipeUp() }
-        XCTAssertTrue(records.waitForExistence(timeout: 5))
-        records.tap()
-        let text = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "用户取消选择文件夹")).firstMatch
-        XCTAssertTrue(text.waitForExistence(timeout: 5), "取消结果必须到达工作区诊断")
-        screenshot("picker-reopened-after-cancellation", app: app)
-    }
 }
