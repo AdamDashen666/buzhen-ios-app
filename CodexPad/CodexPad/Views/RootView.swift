@@ -200,7 +200,7 @@ struct FolderPickerPresenter: UIViewControllerRepresentable {
 }
 
 @MainActor
-final class FolderPickerHostController: UIViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate {
+final class FolderPickerHostController: UIViewController, UIDocumentPickerDelegate {
     var onEvent: (@MainActor (String) -> Void)?
     var completion: (@MainActor (Result<URL?, Error>) -> Void)?
     private var picker: UIDocumentPickerViewController?
@@ -242,7 +242,6 @@ final class FolderPickerHostController: UIViewController, UIDocumentPickerDelega
         onEvent?("原生文件选择器已创建，代理已绑定")
         present(picker, animated: true) { [weak self, weak picker] in
             guard let self, let picker, self.picker === picker else { return }
-            picker.presentationController?.delegate = self
             self.onEvent?(picker.delegate === self
                           ? "原生文件选择器已显示，代理仍有效"
                           : "原生文件选择器代理被替换")
@@ -262,11 +261,6 @@ final class FolderPickerHostController: UIViewController, UIDocumentPickerDelega
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
         onEvent?("原生代理收到取消事件")
         finish(.success(nil), from: controller)
-    }
-
-    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        onEvent?("用户交互关闭原生文件选择器")
-        finish(.success(nil), from: presentationController.presentedViewController)
     }
 
     private func finish(_ result: Result<URL?, Error>, from controller: UIViewController) {
